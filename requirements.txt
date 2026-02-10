@@ -1,0 +1,30 @@
+# =============================================================================
+# BOT DE TRADING - DEPENDENCIAS (SIMPLIFICADAS)
+# =============================================================================
+
+# Exchange API
+ccxt>=4.0.0
+
+# Análisis de datos
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Análisis técnico (más ligero)
+ta>=0.10.2
+
+# Base de datos
+sqlalchemy>=2.0.0
+
+# Notificaciones Telegram
+python-telegram-bot>=20.6
+
+# Utilidades
+python-dotenv>=1.0.0
+schedule>=1.2.0
+
+# Logging
+loguru>=0.7.2
+rich>=13.6.0
+
+# HTTP requests
+requests>=2.31.0
