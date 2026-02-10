@@ -771,11 +771,23 @@ class TradingBot:
         time.sleep(self.cycle_interval)
     
     def _log_status(self) -> None:
-        """Muestra estado actual del bot."""
-        stats = self.risk_manager.get_portfolio_stats()
+        """Muestra estado actual del bot (capital real desde wallet)."""
+        balance = self.exchange.get_balance()
+        liquid = float(balance.get("USDT", 0))
+        assets = 0
+        for asset, amount in balance.items():
+            if asset != "USDT" and float(amount) > 0:
+                try:
+                    data = self.data_manager.get_market_summary(f"{asset}/USDT")
+                    assets += float(amount) * float(data.get("price", 0))
+                except:
+                    pass
+        total_capital = liquid + assets
+        initial = float(CAPITAL['initial_usd'])
+        roi = ((total_capital - initial) / initial) * 100 if initial > 0 else 0
         
-        logger.info(f"💼 Capital: ${stats['current_capital']:.2f} | "
-                   f"ROI: {stats['roi_pct']:.2f}% | "
+        logger.info(f"💼 Capital: ${total_capital:.2f} | "
+                   f"ROI: {roi:.2f}% | "
                    f"Trades: {self.stats['trades']}")
     
     def _send_hourly_update(self) -> None:
