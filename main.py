@@ -30,7 +30,7 @@ logger.add(
 )
 
 # Imports del proyecto
-from config.settings import PORTFOLIO, OPERATION_MODE, STRATEGIES, TRADING_COSTS
+from config.settings import PORTFOLIO, OPERATION_MODE, STRATEGIES, TRADING_COSTS, CAPITAL
 from src.core.state_manager import get_state_manager
 from src.core.exchange_manager import get_exchange
 from src.core.data_manager import get_data_manager

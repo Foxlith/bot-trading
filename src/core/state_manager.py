@@ -189,26 +189,31 @@ class StateManager:
                 positions.append(pos)
             
             # 2. Obtener de STRATEGY_STATE (DCA)
-            if not strategy or strategy == "dca_intelligent":
-                cursor.execute("SELECT state_data FROM strategy_state WHERE strategy_name = 'dca_intelligent'")
-                row = cursor.fetchone()
-                if row:
-                    try:
-                        dca_state = json.loads(row[0])
-                        dca_positions = dca_state.get("positions", {})
-                        for symbol, data in dca_positions.items():
-                            if data.get("amount", 0) > 0:
-                                positions.append({
-                                    "symbol": symbol,
-                                    "strategy": "DCA Intelligent",
-                                    "entry_price": data.get("avg_price", 0),
-                                    "amount": data.get("amount", 0),
-                                    "opened_at": datetime.now().isoformat(), # Estimado
-                                    "status": "open",
-                                    "source": "strategy_state"
-                                })
-                    except Exception as e:
-                        logger.error(f"Error parseando DCA state: {e}")
+        if not strategy or strategy == "dca_intelligent":
+            cursor.execute("SELECT state_data FROM strategy_state WHERE strategy_name = 'dca_intelligent'")
+            row = cursor.fetchone()
+            if row:
+                try:
+                    dca_state = json.loads(row[0])
+                    # Fix: DCAStrategy guarda 'accumulated' y 'entry_prices', no 'positions'
+                    accumulated = dca_state.get("accumulated", {})
+                    entry_prices = dca_state.get("entry_prices", {})
+                    
+                    for symbol, amount in accumulated.items():
+                        amount = float(amount)
+                        if amount > 0:
+                            entry = float(entry_prices.get(symbol, 0))
+                            positions.append({
+                                "symbol": symbol,
+                                "strategy": "DCA Intelligent",
+                                "entry_price": entry,
+                                "amount": amount,
+                                "opened_at": datetime.now().isoformat(), # Estimado
+                                "status": "open",
+                                "source": "strategy_state"
+                            })
+                except Exception as e:
+                    logger.error(f"Error parseando DCA state: {e}")
 
             # 3. Obtener de STRATEGY_STATE (Grid)
             if not strategy or strategy == "grid_trading":

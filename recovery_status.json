@@ -1,0 +1,35 @@
+{
+    "initial_capital": 75.0,
+    "current_usdt": 0.02255038,
+    "assets": [
+        {
+            "symbol": "BTC/USDT",
+            "amount": 5.196496830713048e-05,
+            "avg_entry": 72653.50336576991,
+            "market_price": 69852.65,
+            "pnl_pct": -3.855083700051154,
+            "dist_to_be": 4.00965942705096
+        },
+        {
+            "symbol": "ETH/USDT",
+            "amount": 0.0020043844664779887,
+            "avg_entry": 2141.569533813221,
+            "market_price": 2100.0,
+            "pnl_pct": -1.9410779410558465,
+            "dist_to_be": 1.979501610153367
+        },
+        {
+            "symbol": "SOL/USDT",
+            "amount": 0.04257676881208803,
+            "avg_entry": 89.57846050001102,
+            "market_price": 86.43,
+            "pnl_pct": -3.5147517410288875,
+            "dist_to_be": 3.6427866481673066
+        }
+    ],
+    "total_invested_cost": 11.881927110513686,
+    "current_total_value": 11.541558631451622,
+    "total_pnl": -63.45844136854838,
+    "total_pnl_pct": -84.61125515806451,
+    "recovery_needed_pct": 531.0209524316678
+}
