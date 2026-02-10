@@ -219,78 +219,60 @@ class TelegramNotifier:
         """
         Envía actualización cada hora con estado del mercado.
         USA DATOS REALES DEL EXCHANGE (Wallet Check).
+        P&L calculado con fórmula consistente: total_capital - initial_capital.
         """
         holdings_text = ""
-        portfolio_unrealized = 0
         total_wallet_value = 0
         
-        # Si no se pasa balance, intentar usar el interno (fallback)
+        # Si no se pasa balance, usar exchange directamente
         if not wallet_balance:
-            self._sync_with_db()
-            current_holdings = self.holdings
-        else:
-            # Construir holdings desde el balance real
-            current_holdings = {}
-            for asset, amount in wallet_balance.items():
-                if asset == "USDT" or amount <= 0:
-                    continue
-                # Buscar par correspondiente (ej: BTC -> BTC/USDT)
-                symbol = f"{asset}/USDT" # Asumimos pares base USDT
-                
-                # Intentar recuperar precio promedio de DB para referencia de P&L
-                avg_price = self.holdings.get(symbol, {}).get('avg_price', 0)
-                
-                current_holdings[symbol] = {
-                    'amount': amount,
-                    'avg_price': avg_price,
-                    # 'invested': amount * avg_price # Costo base estimado
-                }
+            try:
+                from src.core.exchange_manager import get_exchange
+                wallet_balance = get_exchange().get_balance()
+            except Exception:
+                wallet_balance = {}
 
-        # Procesar cada holding detectado en la WALLET
-        for symbol, data in current_holdings.items():
-            amount = data['amount']
-            if amount <= 0: continue
+        # Procesar cada activo en la WALLET REAL
+        for asset, amount in wallet_balance.items():
+            if asset == "USDT" or float(amount) <= 0:
+                continue
             
+            symbol = f"{asset}/USDT"
             current_price = market_data.get(symbol, {}).get('price', 0)
+            
             if current_price == 0:
-                 # Intentar buscar precio en holdings si no vino en market_data
-                 current_price = self.holdings.get(symbol, {}).get('avg_price', 0)
-
+                continue
+            
             current_value = float(amount) * float(current_price)
             total_wallet_value += current_value
-            
-            # Cálculo de P&L (Solo si tenemos precio de entrada válido)
-            avg_entry = data.get('avg_price', 0)
-            if avg_entry > 0:
-                cost_basis = amount * avg_entry
-                unrealized = current_value - cost_basis
-                unrealized_pct = ((current_value / cost_basis) - 1) * 100
-                emoji = "Mw" if unrealized >= 0 else "📉"
-                pnl_str = f"${unrealized:+.2f} ({unrealized_pct:+.1f}%)"
-            else:
-                emoji = "ℹ️"
-                pnl_str = "N/A (Sin precio entrada)"
-                unrealized = 0
-            
-            portfolio_unrealized += unrealized
 
             holdings_text += f"""
-{emoji} <b>{symbol}:</b>
-   📦 {amount:.8f}
+💰 <b>{symbol}:</b>
+   📦 {float(amount):.8f}
    💵 Valor: ${current_value:.2f}
-   📊 P&L: {pnl_str}
 """
         
         if not holdings_text:
             holdings_text = "\n   📭 Sin posiciones abiertas\n"
         
-        # Calcular totales reales
-        usdt_balance = wallet_balance.get("USDT", 0) if wallet_balance else self.portfolio_value
-        total_account_value = float(usdt_balance) + float(total_wallet_value)
+        # Calcular totales reales desde wallet
+        usdt_balance = float(wallet_balance.get("USDT", 0))
+        total_account_value = usdt_balance + total_wallet_value
         
-        # Calcular ROI real basado en capital inicial
-        initial_capital = CAPITAL.get("initial_usd", 75)
-        total_roi = ((total_account_value - initial_capital) / initial_capital) * 100
+        # P&L con fórmula corregida (misma que /informe)
+        initial_capital = float(CAPITAL.get("initial_usd", 75))
+        total_pnl = total_account_value - initial_capital
+        total_roi = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
+        
+        # Obtener stats reales desde SQL
+        trade_stats = self.state_manager.get_trade_stats()
+        realized_profit = float(trade_stats.get("total_profit", 0))
+        latent_pnl = total_pnl - realized_profit
+        trades_count = trade_stats.get("total_trades", 0)
+        winning = trade_stats.get("winning_trades", 0)
+        losing = trade_stats.get("losing_trades", 0)
+        
+        emoji_pnl = "🟢" if total_pnl >= 0 else "🔴"
         
         message = f"""
 📊 <b>═══ ACTUALIZACIÓN HORARIA ═══</b>
@@ -303,18 +285,20 @@ class TelegramNotifier:
 💼 <b>Capital Inicial:</b> ${initial_capital:.2f}
 💰 <b>Valor Cuenta:</b> ${total_account_value:.2f}
 💵 <b>Saldo USDT:</b> ${usdt_balance:.2f}
-📊 <b>P&L Latente:</b> ${portfolio_unrealized:+.2f}
-🎯 <b>ROI Real:</b> {total_roi:+.2f}%
+{emoji_pnl} <b>P&L Total:</b> ${total_pnl:+.2f} ({total_roi:+.2f}%)
+   └ 📉 Realizado: ${realized_profit:+.2f}
+   └ 📈 Latente: ${latent_pnl:+.2f}
 
 <b>═══ ESTADÍSTICAS ═══</b>
 
-📊 <b>Trades:</b> {self.trades_count}
-✅ <b>Ganadas:</b> {self.winning_trades}
-❌ <b>Perdidas:</b> {self.losing_trades}
+📊 <b>Trades:</b> {trades_count}
+✅ <b>Ganadas:</b> {winning}
+❌ <b>Perdidas:</b> {losing}
 
 ⏱️ {datetime.now().strftime('%H:%M:%S - %d/%m/%Y')}
 """
         self.send(message.strip())
+
     
     def notify_daily_summary(self, stats: Dict[str, Any]) -> None:
         """Envía resumen diario detallado."""

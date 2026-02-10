@@ -222,10 +222,30 @@ class GridTradingStrategy(BaseStrategy):
         unrealized_pnl = total_current_value - total_invested
         unrealized_pnl_pct = (unrealized_pnl / total_invested * 100) if total_invested > Decimal('0') else Decimal('0')
         
-        # STOP-LOSS DE EMERGENCIA: Si pérdida latente > 10%
-        emergency_stop = unrealized_pnl_pct < Decimal('-10')
+        # STOP-LOSS PROGRESIVO (antes: cierre total a -10%, ahora más inteligente)
+        # Nivel 1: -8% → cerrar el nivel con mayor pérdida (parcial)
+        # Nivel 2: -20% → cerrar TODO (crash real de mercado)
+        partial_stop = unrealized_pnl_pct < Decimal('-8') and unrealized_pnl_pct >= Decimal('-20')
+        emergency_stop = unrealized_pnl_pct < Decimal('-20')
+        
+        # Encontrar el nivel con MAYOR pérdida para cierre parcial
+        worst_level = None
+        if partial_stop:
+            worst_loss = Decimal('0')
+            for level in grid["levels"]:
+                if level["status"] == "bought":
+                    buy_price = safe_decimal(level.get("buy_executed_price", level.get("buy_price", 0)))
+                    amount = safe_decimal(level.get("amount", 0))
+                    if amount > Decimal('0') and buy_price > Decimal('0'):
+                        level_loss = (current_price_d - buy_price) * amount
+                        if level_loss < worst_loss:
+                            worst_loss = level_loss
+                            worst_level = level
+            if worst_level:
+                logger.warning(f"⚠️ GRID STOP PARCIAL: {symbol} pérdida latente {unrealized_pnl_pct:.2f}%. Cerrando nivel {worst_level['level']} (peor posición)")
+        
         if emergency_stop:
-            logger.warning(f"🛑 GRID STOP-LOSS: {symbol} pérdida latente {unrealized_pnl_pct:.2f}% > -10%")
+            logger.warning(f"🛑 GRID STOP-LOSS TOTAL: {symbol} pérdida latente {unrealized_pnl_pct:.2f}% > -20% (CRASH)")
         
         return {
             "symbol": symbol,
@@ -237,6 +257,8 @@ class GridTradingStrategy(BaseStrategy):
             "grid_trades": grid["total_trades"],
             "unrealized_pnl": float(unrealized_pnl),
             "unrealized_pnl_pct": float(unrealized_pnl_pct),
+            "partial_stop": partial_stop,
+            "worst_level": worst_level,
             "emergency_stop": emergency_stop,
         }
     

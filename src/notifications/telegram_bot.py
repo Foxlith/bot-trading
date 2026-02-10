@@ -200,15 +200,29 @@ class TelegramBotInteractivo:
     async def cmd_estado(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Comando /estado - Estado rápido."""
         try:
-            portfolio = self.state_manager.get_portfolio_state()
             trade_stats = self.state_manager.get_trade_stats()
             
-            capital = portfolio.get("current_capital", 75)
-            profit = portfolio.get("total_profit", 0)
-            roi = (profit / CAPITAL["initial_usd"]) * 100 if CAPITAL["initial_usd"] > 0 else 0
+            # Calcular capital real desde wallet (misma lógica que /informe)
+            balance = self.exchange.get_balance()
+            liquid_usdt = balance.get("USDT", 0)
+            assets_value = 0
+            crypto_assets = {k: v for k, v in balance.items() if k != "USDT" and v > 0}
+            for asset, amount in crypto_assets.items():
+                symbol = f"{asset}/USDT"
+                try:
+                    data = self.data_manager.get_market_summary(symbol)
+                    current_price = data.get("price", 0)
+                    assets_value += (float(amount) * float(current_price))
+                except:
+                    pass
             
-            win_rate = trade_stats.get("win_rate", 0)
-            total_trades = trade_stats.get("total_trades", 0)
+            capital = float(liquid_usdt) + float(assets_value)
+            initial = float(CAPITAL["initial_usd"])
+            profit = capital - initial
+            roi = (profit / initial) * 100 if initial > 0 else 0
+            
+            win_rate = float(trade_stats.get("win_rate", 0) or 0)
+            total_trades = int(trade_stats.get("total_trades", 0) or 0)
             
             emoji_profit = "🟢" if profit >= 0 else "🔴"
             
@@ -250,12 +264,8 @@ class TelegramBotInteractivo:
             balance = self.exchange.get_balance()
             liquid_usdt = balance.get("USDT", 0)
             
-            # 2. Calcular Valor de Activos desde BALANCE REAL (no desde open_positions)
-            # Esto garantiza que los números cuadren con el paper_wallet.json
+            # 2. Calcular Valor de Activos desde BALANCE REAL
             assets_value = 0
-            invested_cost = 0  # Se calculará desde open_positions para P&L latente
-            
-            # Obtener valor de mercado de TODOS los activos en el balance real
             crypto_assets = {k: v for k, v in balance.items() if k != "USDT" and v > 0}
             for asset, amount in crypto_assets.items():
                 symbol = f"{asset}/USDT"
@@ -265,23 +275,17 @@ class TelegramBotInteractivo:
                     assets_value += (float(amount) * float(current_price))
                 except Exception as e:
                     logger.warning(f"Error getting price for {symbol} in report: {e}")
-            
-            # Calcular invested_cost desde open_positions (para P&L latente)
-            for pos in open_positions:
-                amount = pos.get("amount", 0)
-                entry = pos.get("entry_price", 0)
-                invested_cost += (float(amount) * float(entry))
 
             # 3. Calcular Capital Total Real
             total_capital = float(liquid_usdt) + float(assets_value)
             
-            # 4. P&L Corregido: Realizado + Latente (matemáticamente consistente)
+            # 4. P&L CORREGIDO - Fórmula matemáticamente consistente:
+            #    P&L Total = Capital Actual - Capital Inicial (fuente de verdad única)
+            #    P&L Latente = P&L Total - P&L Realizado (derivado, no calculado de invested_cost)
             initial_capital = float(CAPITAL['initial_usd'])
-            realized_profit = float(trade_stats.get("total_profit", 0))  # Fuente de verdad SQL
-            latent_pnl = float(assets_value) - float(invested_cost)  # Valor actual - Costo base
-            
-            # P&L Total = Suma de componentes (NO capital - inicial)
-            real_pnl = realized_profit + latent_pnl
+            realized_profit = float(trade_stats.get("total_profit", 0))  # Fuente de verdad: SQL trade_history
+            real_pnl = total_capital - initial_capital  # Fuente de verdad: wallet real
+            latent_pnl = real_pnl - realized_profit  # Derivado: lo que falta por realizar
             real_roi = (real_pnl / initial_capital) * 100 if initial_capital > 0 else 0
 
             # 5. Estadísticas de Trading

@@ -118,12 +118,12 @@ RISK_MANAGEMENT = {
 STRATEGIES = {
     "grid_trading": {
         "enabled": True,
-        "grid_levels": 10,
-        "grid_spacing_pct": 0.005,  # 0.5% entre niveles
-        "take_profit_pct": 0.008,  # SUBIDO: 0.8% (antes 0.5%) para margen seguro
-        "allocation_pct": 0.30,  # 30% del capital para esta estrategia
+        "grid_levels": 5,           # REDUCIDO: 5 niveles (antes 10) = menos exposición
+        "grid_spacing_pct": 0.02,   # SUBIDO: 2% entre niveles (antes 0.5%) = grid cubre 10% de rango
+        "take_profit_pct": 0.025,   # SUBIDO: 2.5% profit target (antes 0.8%) = cubre fees con margen
+        "allocation_pct": 0.30,     # 30% del capital para esta estrategia
         "min_volatility_atr": 0.3,  # 0.3% ATR mínimo
-        "order_size_usd": 2.50,  # Tamaño fijo por nivel $2.50
+        "order_size_usd": 2.50,     # Tamaño fijo por nivel $2.50
     },
     "dca_intelligent": {
         "enabled": True,

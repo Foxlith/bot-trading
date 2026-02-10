@@ -423,9 +423,16 @@ class TradingBot:
         # Analizar estado de la grid
         analysis = grid.analyze(symbol, data)
         
-        # STOP-LOSS DE EMERGENCIA: Si pérdida > 10%, cerrar todas las posiciones
+        # STOP-LOSS PARCIAL: Si pérdida entre -8% y -20%, cerrar peor nivel
+        if analysis.get("partial_stop", False):
+            worst_level = analysis.get("worst_level")
+            if worst_level:
+                self._close_worst_grid_level(symbol, data, grid, worst_level)
+                return  # No procesar más señales este ciclo
+        
+        # STOP-LOSS TOTAL DE EMERGENCIA: Si pérdida > 20% (crash real), cerrar TODO
         if analysis.get("emergency_stop", False):
-            logger.warning(f"🛑 EJECUTANDO STOP-LOSS DE EMERGENCIA para Grid {symbol}")
+            logger.warning(f"🛑 EJECUTANDO STOP-LOSS DE EMERGENCIA TOTAL para Grid {symbol}")
             self._close_all_grid_positions(symbol, data, grid)
             return  # No procesar más señales para este símbolo
         
@@ -557,6 +564,59 @@ class TradingBot:
         elif recenter_result["status"] == "alert":
             # Solo loguear alertas, no spamear Telegram
             logger.warning(f"⚠️ Grid {symbol}: {recenter_result['reason']}")
+    
+    def _close_worst_grid_level(self, symbol: str, data: Dict, grid, worst_level: Dict) -> None:
+        """Cierra solo el peor nivel de la Grid (Stop-Loss Parcial)."""
+        if symbol not in grid.grids:
+            return
+        
+        current_price = data["price"]
+        sell_amount = worst_level.get("bought_amount", 0)
+        
+        if sell_amount <= 0:
+            return
+        
+        order = self.exchange.place_order(
+            symbol,
+            "sell",
+            sell_amount,
+            "market"
+        )
+        
+        if "error" not in order:
+            buy_price = worst_level.get("bought_price", current_price)
+            loss = (current_price - buy_price) * sell_amount
+            
+            try:
+                d_loss = Decimal(str(loss)) if loss is not None and loss == loss else Decimal('0')
+            except Exception:
+                d_loss = Decimal('0')
+            
+            # Registrar en historial
+            self.state_manager.add_trade_to_history(
+                symbol=symbol,
+                strategy="Grid Trading",
+                side="sell",
+                entry_price=buy_price,
+                exit_price=current_price,
+                amount=sell_amount,
+                profit=float(loss),
+                profit_pct=((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+            )
+            
+            # Reset solo este nivel
+            worst_level["status"] = "pending"
+            worst_level["amount"] = 0
+            grid._save_state()
+            
+            logger.warning(f"⚠️ GRID STOP PARCIAL: Cerrado nivel {worst_level['level']} de {symbol}. Pérdida: ${float(d_loss):.2f}")
+            self.notifier.send(
+                f"⚠️ <b>STOP-LOSS PARCIAL</b>\n\n"
+                f"📊 <b>Símbolo:</b> {symbol}\n"
+                f"📉 <b>Nivel cerrado:</b> {worst_level['level']}\n"
+                f"💸 <b>Pérdida:</b> ${float(d_loss):.2f}\n\n"
+                f"💡 Se cerró solo la peor posición para reducir riesgo."
+            )
     
     def _close_all_grid_positions(self, symbol: str, data: Dict, grid) -> None:
         """Cierra todas las posiciones de Grid para un símbolo (Stop-Loss de Emergencia)."""
