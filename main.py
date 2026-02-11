@@ -304,22 +304,42 @@ class TradingBot:
         
         logger.debug(f"📊 {symbol}: ${data['price']:.2f} | RSI:{data['rsi']:.0f} | {data['trend']}")
         
-        # Ejecutar cada estrategia
+        # ===== FILTRO EMA 200 + SELL-ONLY MODE =====
+        ema_200 = float(data.get("ema_200", 0))
+        current_price = float(data.get("price", 0))
+        is_sell_only = config.get("sell_only", False)
+        
+        # Determinar si podemos comprar
+        can_buy = True
+        if is_sell_only:
+            can_buy = False
+            logger.debug(f"🔒 {symbol}: Modo SELL-ONLY (solo ventas)")
+        elif ema_200 > 0 and current_price < ema_200:
+            can_buy = False
+            logger.info(f"⛔ {symbol}: Precio ${current_price:.2f} < EMA200 ${ema_200:.2f} → Solo ventas")
+        
+        # Inyectar flag para que las estrategias lo usen
+        data["can_buy"] = can_buy
+        
+        # Ejecutar estrategias (todas corren, pero respetan can_buy para compras)
         if STRATEGIES["dca_intelligent"]["enabled"]:
             self._run_dca_strategy(symbol, data, config)
         
         if STRATEGIES["grid_trading"]["enabled"]:
             self._run_grid_strategy(symbol, data, config)
         
-        if STRATEGIES["technical_rsi_macd"]["enabled"]:
+        if STRATEGIES["technical_rsi_macd"]["enabled"] and can_buy:
             self._run_technical_strategy(symbol, data, config)
     
     def _run_dca_strategy(self, symbol: str, data: Dict, config: Dict) -> None:
         """Ejecuta la estrategia DCA."""
         dca = self.strategies["dca"]
         
-        # Verificar entrada
-        entry_signal = dca.should_enter(symbol, data)
+        # Verificar entrada (solo si can_buy está habilitado)
+        if data.get("can_buy", True):
+            entry_signal = dca.should_enter(symbol, data)
+        else:
+            entry_signal = None
         if entry_signal:
             # Calcular tamaño de posición
             position = self.risk_manager.calculate_position_size(
@@ -409,8 +429,8 @@ class TradingBot:
                 del self._grid_stoploss_cooldowns[symbol]
                 logger.info(f"✅ Grid {symbol}: Cooldown expirado. Permitiendo reconfiguración.")
         
-        # Configurar grid si no existe
-        if symbol not in grid.grids:
+        # Configurar grid si no existe (solo si can_buy)
+        if data.get("can_buy", True) and symbol not in grid.grids:
             capital = float(self.risk_manager.current_capital) * grid.allocation_pct * config["allocation"]
             grid.setup_grid(
                 symbol, 
@@ -419,6 +439,10 @@ class TradingBot:
                 high_24h=data.get("high_24h", 0),
                 low_24h=data.get("low_24h", 0)
             )
+        
+        # Si no hay grid configurada (y no podemos comprar), no hay nada que hacer
+        if symbol not in grid.grids:
+            return
         
         # Analizar estado de la grid
         analysis = grid.analyze(symbol, data)
@@ -436,8 +460,11 @@ class TradingBot:
             self._close_all_grid_positions(symbol, data, grid)
             return  # No procesar más señales para este símbolo
         
-        # Verificar compras
-        buy_signal = grid.should_enter(symbol, data)
+        # Verificar compras (solo si can_buy)
+        if data.get("can_buy", True):
+            buy_signal = grid.should_enter(symbol, data)
+        else:
+            buy_signal = None
         if buy_signal:
             # grid.grids uses float logic mostly, but if order_size_usd became Decimal in future, convert
             order_size_usd = float(grid.grids[symbol]["order_size_usd"])

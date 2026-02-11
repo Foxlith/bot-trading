@@ -45,19 +45,20 @@ CAPITAL = {
 # =============================================================================
 PORTFOLIO = {
     "BTC/USDT": {
-        "allocation": 0.35,  # 35% del capital (bajado de 60% - ETH rinde mejor en Grid)
-        "min_order_usd": 10,
+        "allocation": 0.45,  # 45% del capital (concentrado para mejor sizing)
+        "min_order_usd": 5,
         "description": "Bitcoin - Base sólida, menor volatilidad"
     },
     "ETH/USDT": {
-        "allocation": 0.40,  # 40% del capital (subido de 30% - mejor WR en Grid)
-        "min_order_usd": 10,
+        "allocation": 0.55,  # 55% del capital (mejor rendimiento en Grid)
+        "min_order_usd": 5,
         "description": "Ethereum - Mayor volatilidad, mejor para Grid"
     },
     "SOL/USDT": {
-        "allocation": 0.25,  # 25% del capital (subido de 10% - diversificación)
-        "min_order_usd": 10,
-        "description": "Solana - Alto potencial de crecimiento"
+        "allocation": 0.0,   # SELL-ONLY: No comprar más, solo vender posiciones existentes
+        "min_order_usd": 5,
+        "sell_only": True,    # Marcador para que las estrategias solo vendan
+        "description": "Solana - Solo vender posiciones existentes"
     },
 }
 
@@ -120,7 +121,7 @@ STRATEGIES = {
         "enabled": True,
         "grid_levels": 5,           # REDUCIDO: 5 niveles (antes 10) = menos exposición
         "grid_spacing_pct": 0.02,   # SUBIDO: 2% entre niveles (antes 0.5%) = grid cubre 10% de rango
-        "take_profit_pct": 0.025,   # SUBIDO: 2.5% profit target (antes 0.8%) = cubre fees con margen
+        "take_profit_pct": 0.03,    # 3% profit target = mayor margen neto después de fees
         "allocation_pct": 0.30,     # 30% del capital para esta estrategia
         "min_volatility_atr": 0.3,  # 0.3% ATR mínimo
         "order_size_usd": 2.50,     # Tamaño fijo por nivel $2.50
