@@ -189,34 +189,35 @@ class StateManager:
                 positions.append(pos)
             
             # 2. Obtener de STRATEGY_STATE (DCA)
-        if not strategy or strategy == "dca_intelligent":
-            cursor.execute("SELECT state_data FROM strategy_state WHERE strategy_name = 'dca_intelligent'")
-            row = cursor.fetchone()
-            if row:
-                try:
-                    dca_state = json.loads(row[0])
-                    # Fix: DCAStrategy guarda 'accumulated' y 'entry_prices', no 'positions'
-                    accumulated = dca_state.get("accumulated", {})
-                    entry_prices = dca_state.get("entry_prices", {})
-                    
-                    for symbol, amount in accumulated.items():
-                        amount = float(amount)
-                        if amount > 0:
-                            entry = float(entry_prices.get(symbol, 0))
-                            positions.append({
-                                "symbol": symbol,
-                                "strategy": "DCA Intelligent",
-                                "entry_price": entry,
-                                "amount": amount,
-                                "opened_at": datetime.now().isoformat(), # Estimado
-                                "status": "open",
-                                "source": "strategy_state"
-                            })
-                except Exception as e:
-                    logger.error(f"Error parseando DCA state: {e}")
+            # Nota: strategy puede ser "DCA Intelligent" (nombre de estrategia) 
+            # pero en strategy_state se guarda como "dca_intelligent" (clave interna)
+            if not strategy or strategy in ("DCA Intelligent", "dca_intelligent"):
+                cursor.execute("SELECT state_data FROM strategy_state WHERE strategy_name = 'dca_intelligent'")
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        dca_state = json.loads(row[0])
+                        accumulated = dca_state.get("accumulated", {})
+                        entry_prices = dca_state.get("entry_prices", {})
+                        
+                        for symbol, amount in accumulated.items():
+                            amount = float(amount)
+                            if amount > 0:
+                                entry = float(entry_prices.get(symbol, 0))
+                                positions.append({
+                                    "symbol": symbol,
+                                    "strategy": "DCA Intelligent",
+                                    "entry_price": entry,
+                                    "amount": amount,
+                                    "opened_at": datetime.now().isoformat(),
+                                    "status": "open",
+                                    "source": "strategy_state"
+                                })
+                    except Exception as e:
+                        logger.error(f"Error parseando DCA state: {e}")
 
             # 3. Obtener de STRATEGY_STATE (Grid)
-            if not strategy or strategy == "grid_trading":
+            if not strategy or strategy in ("Grid Trading", "grid_trading"):
                 cursor.execute("SELECT state_data FROM strategy_state WHERE strategy_name = 'grid_trading'")
                 row = cursor.fetchone()
                 if row:
@@ -225,7 +226,6 @@ class StateManager:
                         grids = grid_state.get("grids", {})
                         for symbol, grid_data in grids.items():
                             levels = grid_data.get("levels", [])
-                            # Sumarizar todos los niveles comprados como una posición agregada por símbolo
                             total_amount = 0
                             total_cost = 0
                             for lvl in levels:
@@ -248,8 +248,8 @@ class StateManager:
                                 })
                     except Exception as e:
                         logger.error(f"Error parseando Grid state: {e}")
-            
-            return positions
+        
+        return positions
     
     def close_position(self, position_id: int, exit_price: float, profit: float, fee_paid: float = 0) -> None:
         """Cierra una posición y la mueve al historial."""
@@ -293,7 +293,7 @@ class StateManager:
     
     def update_position(self, position_id: int, **kwargs) -> None:
         """Actualiza una posición existente."""
-        valid_fields = ['amount', 'stop_loss', 'take_profit', 'extra_data']
+        valid_fields = ['amount', 'stop_loss', 'take_profit', 'entry_price', 'extra_data']
         updates = {k: v for k, v in kwargs.items() if k in valid_fields}
         
         if not updates:
