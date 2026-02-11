@@ -95,7 +95,7 @@ RISK_MANAGEMENT = {
     "default_take_profit_pct": 0.06,  # 6%
     
     # Trailing stop
-    "trailing_stop_pct": 0.02,  # 2%
+    "trailing_stop_pct": 0.03,  # 3% (optimizado, antes 2%)
     
     # Máximo drawdown permitido antes de pausar
     "max_drawdown_pct": 0.15,  # 15%
@@ -136,7 +136,7 @@ STRATEGIES = {
     "technical_rsi_macd": {
         "enabled": True,
         "rsi_oversold": 30,  # Industria estándar: 30 (más conservador)
-        "rsi_overbought": 70,  # Industria estándar: 70 (más conservador)
+        "rsi_overbought": 65,  # Optimizado: 65 (antes 70) - Vender antes
         "macd_signal_threshold": 0,
         "allocation_pct": 0.30,  # 30% del capital
     },

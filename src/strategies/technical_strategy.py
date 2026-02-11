@@ -228,8 +228,14 @@ class TechnicalStrategy(BaseStrategy):
                     
                     price_d = safe_decimal(analysis["price"])
                     
-                    # Filtro de Tendencia Macro (EMA 200)
+                    # Filtro de Tendencia: No entrar si EMA 50 < EMA 200 (tendencia bajista)
+                    ema_50 = safe_decimal(data.get("ema_50", 0))
                     ema_200 = safe_decimal(data.get("ema_200", 0))
+                    if ema_50 > 0 and ema_200 > 0 and ema_50 < ema_200:
+                        logger.info(f"🚫 Señal ignorada: {symbol} - EMA50 < EMA200 (cruce bajista)")
+                        return None
+                    
+                    # Filtro de Tendencia Macro (precio debajo de EMA 200)
                     if ema_200 > 0 and price_d < ema_200:
                         logger.info(f"🚫 Señal ignorada: {symbol} debajo de EMA 200 (Tendencia bajista macro)")
                         return None

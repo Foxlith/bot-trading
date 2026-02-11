@@ -47,10 +47,10 @@ STRATEGIES_CONFIG = {
     "technical": {
         "allocation_pct": 0.30,
         "rsi_oversold": 30,
-        "rsi_overbought": 70,
+        "rsi_overbought": 65,
         "stop_loss_pct": 0.03,
         "take_profit_pct": 0.06,
-        "trailing_stop_pct": 0.02,
+        "trailing_stop_pct": 0.03,
     },
 }
 
@@ -563,6 +563,11 @@ class TechnicalSimulator:
                 
                 # EMA 200 filter
                 if ema_200 > 0 and price < ema_200:
+                    return
+                
+                # EMA 50 < EMA 200 filter (tendencia bajista)
+                ema_50 = row.get("ema_50", 0)
+                if ema_50 > 0 and ema_200 > 0 and ema_50 < ema_200:
                     return
                 
                 self._open_position(symbol, price, atr, timestamp)
