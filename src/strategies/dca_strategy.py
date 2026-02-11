@@ -74,7 +74,7 @@ class DCAIntelligentStrategy(BaseStrategy):
     
     def _get_db_pos_id(self, symbol: str) -> Optional[int]:
         """Busca el ID de la posición SQL para un símbolo."""
-        positions = self.state_manager.get_open_positions("DCA Intelligent")
+        positions = self.state_manager.get_open_positions("DCA Intelligent") or []
         # Filter for actual SQL positions (sanity check if source key exists)
         for pos in positions:
             if pos["symbol"] == symbol and pos.get("source") != "strategy_state": 

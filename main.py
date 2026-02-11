@@ -277,7 +277,9 @@ class TradingBot:
             try:
                 self._process_symbol(symbol, config)
             except Exception as e:
+                import traceback
                 logger.error(f"Error procesando {symbol}: {e}")
+                logger.error(traceback.format_exc())
         
         # Actualizar estadísticas
         self.last_cycle = cycle_start
