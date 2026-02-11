@@ -221,6 +221,11 @@ class TelegramBotInteractivo:
             profit = capital - initial
             roi = (profit / initial) * 100 if initial > 0 else 0
             
+            # Conversión COP
+            cop_rate = float(CAPITAL.get("usd_cop_rate", 3652))
+            capital_cop = capital * cop_rate
+            profit_cop = profit * cop_rate
+            
             win_rate = float(trade_stats.get("win_rate", 0) or 0)
             total_trades = int(trade_stats.get("total_trades", 0) or 0)
             
@@ -229,8 +234,8 @@ class TelegramBotInteractivo:
             message = f"""
 📊 <b>ESTADO DEL BOT</b>
 
-💰 <b>Capital:</b> ${capital:.2f}
-{emoji_profit} <b>P&L:</b> ${profit:+.2f} ({roi:+.2f}%)
+💰 <b>Capital:</b> ${capital:.2f} (${capital_cop:,.0f} COP)
+{emoji_profit} <b>P&L:</b> ${profit:+.2f} ({roi:+.2f}%) | {profit_cop:+,.0f} COP
 📈 <b>Trades:</b> {total_trades}
 🎯 <b>Win Rate:</b> {win_rate:.1f}%
 
@@ -288,6 +293,14 @@ class TelegramBotInteractivo:
             latent_pnl = real_pnl - realized_profit  # Derivado: lo que falta por realizar
             real_roi = (real_pnl / initial_capital) * 100 if initial_capital > 0 else 0
 
+            # Conversión COP
+            cop_rate = float(CAPITAL.get("usd_cop_rate", 3652))
+            capital_cop = initial_capital * cop_rate
+            valor_cop = total_capital * cop_rate
+            liquid_cop = float(liquid_usdt) * cop_rate
+            assets_cop = float(assets_value) * cop_rate
+            pnl_cop = real_pnl * cop_rate
+
             # 5. Estadísticas de Trading
             win_rate = float(trade_stats.get("win_rate", 0) or 0)
             total_trades = int(trade_stats.get("total_trades", 0) or 0)
@@ -302,12 +315,12 @@ class TelegramBotInteractivo:
 
 <b>══ 💰 CAPITAL (REAL) ══</b>
 
-💵 <b>Capital Inicial:</b> ${initial_capital:.2f}
-💰 <b>Capital Actual:</b> ${total_capital:.2f}
-   ├ 🟢 Liquidez: ${liquid_usdt:.2f}
-   └ 📦 Activos: ${assets_value:.2f}
+💵 <b>Capital Inicial:</b> ${initial_capital:.2f} (${capital_cop:,.0f} COP)
+💰 <b>Capital Actual:</b> ${total_capital:.2f} (${valor_cop:,.0f} COP)
+   ├ 🟢 Liquidez: ${liquid_usdt:.2f} (${liquid_cop:,.0f} COP)
+   └ 📦 Activos: ${assets_value:.2f} (${assets_cop:,.0f} COP)
 
-{emoji_profit} <b>P&L Total:</b> ${real_pnl:+.2f} ({real_roi:+.2f}%)
+{emoji_profit} <b>P&L Total:</b> ${real_pnl:+.2f} ({real_roi:+.2f}%) | {pnl_cop:+,.0f} COP
    └ 📉 Realizado (Cerrados): ${realized_profit:+.2f}
    └ 📈 Latente (Abiertos): ${latent_pnl:+.2f}
 

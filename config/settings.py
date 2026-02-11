@@ -33,11 +33,11 @@ EXCHANGE = {
 # CONFIGURACIÓN DE CAPITAL Y APORTES
 # =============================================================================
 CAPITAL = {
-    "initial_cop": 300_000,  # Pesos colombianos
+    "initial_cop": 800_000,  # Total invertido en pesos colombianos (300k + 500k)
     "monthly_contribution_cop": 300_000,
-    "usd_cop_rate": 4_000,  # Tasa aproximada COP/USD
-    "initial_usd": 75,  # ~$75 USD
-    "monthly_contribution_usd": 75,
+    "usd_cop_rate": 3_652,  # TRM actual COP/USD
+    "initial_usd": 211.92,  # $75 + $136.92 (500k COP)
+    "monthly_contribution_usd": 82,
 }
 
 # =============================================================================

@@ -264,6 +264,13 @@ class TelegramNotifier:
         total_pnl = total_account_value - initial_capital
         total_roi = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
         
+        # Conversión a COP
+        cop_rate = float(CAPITAL.get("usd_cop_rate", 3652))
+        capital_cop = initial_capital * cop_rate
+        valor_cop = total_account_value * cop_rate
+        usdt_cop = usdt_balance * cop_rate
+        pnl_cop = total_pnl * cop_rate
+        
         # Obtener stats reales desde SQL
         trade_stats = self.state_manager.get_trade_stats()
         realized_profit = float(trade_stats.get("total_profit", 0))
@@ -282,10 +289,10 @@ class TelegramNotifier:
 
 <b>═══ RESUMEN DE CUENTA ═══</b>
 
-💼 <b>Capital Inicial:</b> ${initial_capital:.2f}
-💰 <b>Valor Cuenta:</b> ${total_account_value:.2f}
-💵 <b>Saldo USDT:</b> ${usdt_balance:.2f}
-{emoji_pnl} <b>P&L Total:</b> ${total_pnl:+.2f} ({total_roi:+.2f}%)
+💼 <b>Capital Inicial:</b> ${initial_capital:.2f} (${capital_cop:,.0f} COP)
+💰 <b>Valor Cuenta:</b> ${total_account_value:.2f} (${valor_cop:,.0f} COP)
+💵 <b>Saldo USDT:</b> ${usdt_balance:.2f} (${usdt_cop:,.0f} COP)
+{emoji_pnl} <b>P&L Total:</b> ${total_pnl:+.2f} ({total_roi:+.2f}%) | {pnl_cop:+,.0f} COP
    └ 📉 Realizado: ${realized_profit:+.2f}
    └ 📈 Latente: ${latent_pnl:+.2f}
 
