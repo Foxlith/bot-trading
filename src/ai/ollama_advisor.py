@@ -298,6 +298,7 @@ Responde SOLO con este formato JSON:
             confidence = max(1, min(10, int(result.get("confidence", 5))))
             result["confidence"] = confidence
             result["approved"] = confidence >= self.min_confidence
+            result["reasoning"] = self._sanitize_to_spanish(result.get("reasoning", ""))
             
             # Actualizar estadísticas
             if result["approved"]:
@@ -384,6 +385,8 @@ Tu rol es decidir si es BUEN MOMENTO para vender una posición de acumulación (
 FILOSOFÍA: El DCA acumula a largo plazo, pero TAMBIÉN debe asegurar ganancias en momentos clave.
 No dejes escapar oportunidades reales pensando que "siempre subirá más".
 
+IDIOMA: Responde SIEMPRE en ESPAÑOL. NUNCA uses chino, inglés ni otro idioma. Solo español.
+
 REGLAS ESTRICTAS:
 1. Responde ÚNICAMENTE con un JSON válido, sin texto adicional
 2. El campo "urgency" debe ser un número entero del 1 al 10:
@@ -397,7 +400,7 @@ REGLAS ESTRICTAS:
    - 0.10 (10%) para ventas ligeras / asegurar algo
    - 0.25 (25%) para toma de ganancias moderada
    - 0.50 (50%) para señales fuertes de techo
-5. El campo "reasoning" debe ser una explicación breve en ESPAÑOL (máximo 2 oraciones)
+5. El campo "reasoning" debe ser en ESPAÑOL ÚNICAMENTE (máximo 2 oraciones, sin caracteres chinos)
 6. NO inventes datos. Usa SOLO los datos proporcionados
 7. NO pongas bloques de pensamiento, solo el JSON"""
 
@@ -447,6 +450,9 @@ Responde SOLO con este formato JSON:
                 else:
                     sell_pct = 0.50
             result["sell_pct"] = sell_pct
+            
+            # Sanitizar reasoning (quitar caracteres chinos que qwen2.5 a veces mezcla)
+            result["reasoning"] = self._sanitize_to_spanish(result.get("reasoning", ""))
 
             # Log detallado
             emoji = "🔴" if result["should_sell"] else "🟡"
@@ -620,6 +626,19 @@ Genera un reporte breve con:
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         # Limpiar líneas vacías extras
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()
+    
+    def _sanitize_to_spanish(self, text: str) -> str:
+        """
+        Elimina caracteres no-latinos (chino, japonés, coreano, etc.) que
+        el modelo qwen2.5 a veces mezcla en sus respuestas en español.
+        """
+        import re
+        # Eliminar caracteres CJK (chino/japonés/coreano) y otros scripts no-latinos
+        cleaned = re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]+', '', text)
+        # Limpiar espacios y puntuación sueltos que queden
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+        cleaned = re.sub(r'[，。、]+', '.', cleaned)  # Puntuación china → punto
         return cleaned.strip()
     
     def get_stats(self) -> Dict[str, Any]:
