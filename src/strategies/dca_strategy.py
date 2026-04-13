@@ -214,11 +214,14 @@ class DCAIntelligentStrategy(BaseStrategy):
     
     def should_exit(self, symbol: str, position: Dict, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        En DCA, vendemos parcialmente solo en condiciones extremas.
+        Red de seguridad para venta DCA (fallback cuando la IA no está disponible).
         
-        Condiciones de venta:
-        1. Ganancia > 50% y RSI > 80 (extremadamente sobrecomprado)
-        2. O take profit definido alcanzado
+        Cuando Ollama está corriendo, la IA toma decisiones de venta ANTES de que
+        estas reglas se activen (ver main.py → _run_dca_strategy → AI Sell DCA).
+        
+        Condiciones de venta (fallback sin IA):
+        1. Ganancia > 15% y RSI > 75 → Vender 25%
+        2. Ganancia > 30% → Vender 50%
         """
         if symbol not in self.entry_prices or self.accumulated.get(symbol, 0) == 0:
             return None
@@ -233,8 +236,8 @@ class DCAIntelligentStrategy(BaseStrategy):
         else:
             profit_pct = Decimal('0')
         
-        # Vender 25% si ganancia > 50% y RSI muy alto
-        if profit_pct > 0.50 and rsi > 80:
+        # Vender 25% si ganancia > 15% y RSI alto (sobrecomprado)
+        if profit_pct > 0.15 and rsi > 75:
             return {
                 "action": "sell",
                 "symbol": symbol,
@@ -244,8 +247,8 @@ class DCAIntelligentStrategy(BaseStrategy):
                 "reason": f"Take profit parcial: +{profit_pct*100:.1f}%, RSI={rsi:.0f}"
             }
         
-        # Vender 50% si ganancia > 100% (duplicó)
-        if profit_pct > 1.0:
+        # Vender 50% si ganancia > 30%
+        if profit_pct > 0.30:
             return {
                 "action": "sell",
                 "symbol": symbol,

@@ -30,7 +30,7 @@ logger.add(
 )
 
 # Imports del proyecto
-from config.settings import PORTFOLIO, OPERATION_MODE, STRATEGIES, TRADING_COSTS, CAPITAL
+from config.settings import PORTFOLIO, OPERATION_MODE, STRATEGIES, TRADING_COSTS, CAPITAL, OLLAMA
 from src.core.state_manager import get_state_manager
 from src.core.exchange_manager import get_exchange
 from src.core.data_manager import get_data_manager
@@ -41,6 +41,7 @@ from src.risk.risk_manager import get_risk_manager
 from src.notifications.telegram_notifier import get_notifier
 from src.notifications.telegram_bot import TelegramBotInteractivo
 from src.utils.transaction_manager import TransactionManager
+from src.ai.ollama_advisor import get_ai_advisor
 
 
 class TradingBot:
@@ -62,6 +63,9 @@ class TradingBot:
         self.risk_manager = get_risk_manager()
         self.notifier = get_notifier()
         
+        # 🧠 AI Advisor (Ollama)
+        self.ai_advisor = get_ai_advisor()
+        
         # Estrategias
         self.strategies = {
             "dca": DCAIntelligentStrategy(),
@@ -74,10 +78,18 @@ class TradingBot:
         self.last_cycle = None
         self.cycle_interval = 60  # segundos entre ciclos
         self.last_hourly_update = datetime.now()
-        self.last_weekly_check = datetime.now().date()
+        
+        # Inicializar reportes con fecha de ayer para que se puedan enviar el día que se inicia el bot
+        yesterday = datetime.now().date() - timedelta(days=1)
+        self.last_weekly_check = yesterday
+        self.last_ai_report = yesterday
         
         # Cooldown tras stop-loss de emergencia (símbolo -> datetime)
         self._grid_stoploss_cooldowns = {}
+        
+        # Cooldown para ventas activadas por IA (evita vender en micro-lotes cada ciclo)
+        # La IA solo puede recomendar una venta cada 4h por símbolo (igual que el DCA buy interval)
+        self._ai_sell_cooldowns: dict = {}
         
         # Estadísticas
         self.stats = {
@@ -158,7 +170,7 @@ class TradingBot:
                         if OPERATION_MODE['mode'] == 'paper':
                             ticker = self.exchange.get_ticker(d['symbol'])
                             if ticker and ticker.get('last'):
-                                state_manager.save_position(
+                                self.state_manager.save_position(
                                     symbol=d['symbol'],
                                     strategy="Reconciled",
                                     entry_price=ticker['last'],
@@ -193,7 +205,7 @@ class TradingBot:
                                     symbol=d['symbol'],
                                     strategy="Reconciled",
                                     entry_price=price,
-                                    amount=d['amount'], # Usamos la cantidad 'remanente' reportada en discrepancia
+                                    amount=d['exchange_amount'], # FIX: Usar la cantidad REAL del exchange, no la del dict original
                                     extra_data={"reconciled": True, "reconciled_after_fix": True}
                                 )
                                 logger.info(f"   ✨ Saldo remanente ({d['amount']:.6f}) re-importado correctamente.")
@@ -294,6 +306,9 @@ class TradingBot:
             
         # Reporte semanal (Domingo 19:00)
         self._check_weekly_report()
+        
+        # 🧠 Reporte diario IA
+        self._check_ai_daily_report()
     
     def _process_symbol(self, symbol: str, config: Dict) -> None:
         """Procesa un par de trading."""
@@ -311,38 +326,69 @@ class TradingBot:
         current_price = float(data.get("price", 0))
         is_sell_only = config.get("sell_only", False)
         
-        # Determinar si podemos comprar
+        # Determinar si podemos comprar (Grid & Technical)
         can_buy = True
         if is_sell_only:
             can_buy = False
             logger.debug(f"🔒 {symbol}: Modo SELL-ONLY (solo ventas)")
-        elif ema_200 > 0 and current_price < ema_200:
+        elif ema_200 > 0 and current_price < ema_200 * 0.995:  # 0.5% margen de tolerancia
             can_buy = False
-            logger.info(f"⛔ {symbol}: Precio ${current_price:.2f} < EMA200 ${ema_200:.2f} → Solo ventas")
+            logger.info(f"⛔ {symbol}: Precio ${current_price:.2f} < EMA200 ${ema_200:.2f} (margen 0.5%) → Solo ventas")
         
-        # Inyectar flag para que las estrategias lo usen
+        # Inyectar flag para Grid y Technical
         data["can_buy"] = can_buy
         
-        # Ejecutar estrategias (todas corren, pero respetan can_buy para compras)
-        if STRATEGIES["dca_intelligent"]["enabled"]:
-            self._run_dca_strategy(symbol, data, config)
+        # Pre-chequeo de balance USDT (una sola consulta por ciclo, compartida por todas las estrategias)
+        # Evita que la IA pierda 20-30s consultando cuando no hay saldo para comprar
+        balance = self.exchange.get_balance()
+        available_usdt = float(balance.get("USDT", 0))
+        data["available_usdt"] = available_usdt  # Inyectar para que las estrategias lo usen
+        MIN_ORDER_USD = 3.0  # Mínimo para ejecutar cualquier compra
         
-        if STRATEGIES["grid_trading"]["enabled"]:
+        if available_usdt < MIN_ORDER_USD:
+            logger.debug(f"💤 {symbol}: Sin saldo suficiente (${available_usdt:.2f} < ${MIN_ORDER_USD:.2f}) - IA no consultada")
+        
+        # DCA: SIEMPRE puede comprar (excepto sell_only)
+        # La filosofía DCA requiere compras regulares en TODAS las condiciones de mercado
+        dca_can_buy = not is_sell_only and available_usdt >= MIN_ORDER_USD
+        
+        # Ejecutar estrategias
+        # NOTA: La IA se consulta DENTRO de cada estrategia solo cuando hay señal real
+        # (no preventivamente cada ciclo, ahorrando ~30s de latencia)
+        if STRATEGIES["dca_intelligent"]["enabled"]:
+            self._run_dca_strategy(symbol, data, config, dca_can_buy=dca_can_buy)
+        
+        if STRATEGIES["grid_trading"]["enabled"] and available_usdt >= MIN_ORDER_USD:
             self._run_grid_strategy(symbol, data, config)
         
-        if STRATEGIES["technical_rsi_macd"]["enabled"] and can_buy:
+        if STRATEGIES["technical_rsi_macd"]["enabled"] and can_buy and available_usdt >= MIN_ORDER_USD:
             self._run_technical_strategy(symbol, data, config)
     
-    def _run_dca_strategy(self, symbol: str, data: Dict, config: Dict) -> None:
-        """Ejecuta la estrategia DCA."""
+    def _run_dca_strategy(self, symbol: str, data: Dict, config: Dict, dca_can_buy: bool = True) -> None:
+        """Ejecuta la estrategia DCA.
+        
+        NOTA: DCA está EXENTO del filtro EMA-200. Solo se bloquea si sell_only=True.
+        La filosofía DCA es acumular en todas las condiciones de mercado.
+        """
         dca = self.strategies["dca"]
         
-        # Verificar entrada (solo si can_buy está habilitado)
-        if data.get("can_buy", True):
+        # DCA usa su propio flag (exento de EMA-200)
+        if dca_can_buy:
             entry_signal = dca.should_enter(symbol, data)
         else:
             entry_signal = None
         if entry_signal:
+            # 🧠 AI Filter: Solo consultar cuando hay señal REAL y hay saldo suficiente
+            if self.ai_advisor.is_available() and OLLAMA.get("filter_enabled", False):
+                ai_result = self.ai_advisor.analyze_trade_signal(
+                    symbol=symbol,
+                    strategy="DCA",
+                    signal_type="buy",
+                    market_data=data,
+                )
+                if not ai_result.get("approved", True):
+                    logger.info(f"🧠 AI BLOQUEÓ DCA {symbol}: {ai_result.get('reasoning', '')}")
+                    return
             # Calcular tamaño de posición
             position = self.risk_manager.calculate_position_size(
                 symbol,
@@ -378,42 +424,116 @@ class TradingBot:
                     })
                     self.stats["trades"] += 1
         
-        # Verificar salida
+        # Verificar salida normal (DCA reglas fallback: +15% ganancia + RSI>75)
         exit_signal = dca.should_exit(symbol, {}, data)
+        
+        # 🧠 AI Sell DCA — Cerebro principal de decisiones de venta
+        # Filosofía: La IA analiza el mercado completo y decide si es buen momento para vender.
+        # Condiciones para consultar: cooldown 4h + ganancia >= 2%
+        if not exit_signal and self.ai_advisor.is_available() and OLLAMA.get("filter_enabled", False):
+            accumulated = float(dca.accumulated.get(symbol, 0))
+            if accumulated > 0:
+                entry_price = float(dca.entry_prices.get(symbol, 0))
+                current_price = float(data.get("price", 0))
+                profit_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                
+                # Cooldown de 4h (alineado con el intervalo de compra DCA)
+                ai_sell_key = f"ai_sell_{symbol}"
+                last_ai_eval = self._ai_sell_cooldowns.get(ai_sell_key)
+                cooldown_ok = (
+                    last_ai_eval is None or
+                    (datetime.now() - last_ai_eval).total_seconds() >= 4 * 3600
+                )
+                
+                # Consultar IA si hay ganancia >= 2% y el cooldown lo permite
+                # La IA decide si vale la pena vender según el contexto completo del mercado
+                if cooldown_ok and profit_pct >= 2.0:
+                    logger.info(
+                        f"🧠 AI evaluando venta DCA {symbol}: "
+                        f"Ganancia {profit_pct:.1f}% | Acumulado: {accumulated:.8f}"
+                    )
+                    ai_sell = self.ai_advisor.analyze_sell_opportunity(
+                        symbol=symbol,
+                        strategy="DCA",
+                        market_data=data,
+                        position_data={
+                            "entry_price": entry_price,
+                            "accumulated": accumulated,
+                        },
+                    )
+                    # Registrar cooldown SIEMPRE (consultó, no vuelve hasta dentro de 4h)
+                    self._ai_sell_cooldowns[ai_sell_key] = datetime.now()
+                    
+                    if ai_sell.get("should_sell", False):
+                        urgency = ai_sell.get("urgency", 0)
+                        ai_sell_pct = ai_sell.get("sell_pct", 0.25)
+                        
+                        # Calcular valores para el log
+                        sell_amount_preview = accumulated * ai_sell_pct
+                        sell_value_preview = sell_amount_preview * current_price
+                        
+                        logger.info(
+                            f"🧠 AI OPORTUNIDAD VENTA DCA {symbol} | "
+                            f"Urgencia: {urgency}/10 | Vender {int(ai_sell_pct*100)}% | "
+                            f"Ganancia: {profit_pct:.1f}% | "
+                            f"Valor venta: ~${sell_value_preview:.2f} | "
+                            f"{ai_sell.get('reasoning', '')}"
+                        )
+                        exit_signal = {
+                            "sell_pct": ai_sell_pct,
+                            "reason": f"IA: {ai_sell.get('reasoning', '')} (+{profit_pct:.1f}%, urgencia {urgency}/10)"
+                        }
+                    else:
+                        logger.info(
+                            f"🧠 AI recomienda MANTENER {symbol} | "
+                            f"Ganancia actual: {profit_pct:.1f}% | {ai_sell.get('reasoning', '')}"
+                        )
+
+        
         if exit_signal:
-            sell_amount = dca.execute_sell(
-                symbol,
-                exit_signal["sell_pct"],
-                data["price"]
-            )
+            # FIX Bug 6: Primero ejecutar la orden en el exchange, LUEGO actualizar estado interno
+            # Calcular la cantidad a vender antes de modificar el estado
+            sell_pct = exit_signal["sell_pct"]
+            # DCA guarda acumulado en dca.accumulated (no dca.positions)
+            total_amount = float(dca.accumulated.get(symbol, 0))
+            sell_amount = total_amount * sell_pct
             
             if sell_amount > 0:
-                self.exchange.place_order(symbol, "sell", sell_amount)
+                order = self.exchange.place_order(symbol, "sell", sell_amount)
                 
-                # Calcular Net Profit y Fees
-                entry_price = float(dca.entry_prices.get(symbol, data["price"]))
-                # Convertir Decimal a float para cálculos en main
-                f_sell_amount = float(sell_amount)
-                gross_profit = (data["price"] - entry_price) * f_sell_amount
-                fee_paid = (data["price"] + entry_price) * f_sell_amount * TRADING_COSTS["taker_fee_pct"]
-                net_profit = gross_profit - fee_paid
-                
-                # Registrar P&L en Risk Manager (IMPORTANTE: Faltaba esto)
-                self.risk_manager.record_trade_result(net_profit, fee_paid, gross_profit)
-                
-                tx_id = TransactionManager.generate_tx_id(symbol, "sell", "DCA")
-                
-                self.notifier.notify_trade_close({
-                    "tx_id": tx_id,
-                    "symbol": symbol,
-                    "side": "sell",
-                    "price": data["price"],
-                    "amount": sell_amount,
-                    "profit": net_profit,
-                    "fee_paid": fee_paid,
-                    "entry_price": entry_price,
-                    "strategy": "DCA Intelligent"
-                })
+                if "error" not in order:
+                    # Orden exitosa -> ahora sí actualizar estado interno del DCA
+                    dca.execute_sell(
+                        symbol,
+                        exit_signal["sell_pct"],
+                        data["price"]
+                    )
+                    
+                    # Calcular Net Profit y Fees
+                    entry_price = float(dca.entry_prices.get(symbol, data["price"]))
+                    f_sell_amount = float(sell_amount)
+                    gross_profit = (data["price"] - entry_price) * f_sell_amount
+                    fee_paid = (data["price"] + entry_price) * f_sell_amount * TRADING_COSTS["taker_fee_pct"]
+                    net_profit = gross_profit - fee_paid
+                    
+                    # Registrar P&L en Risk Manager
+                    self.risk_manager.record_trade_result(net_profit, fee_paid, gross_profit)
+                    
+                    tx_id = TransactionManager.generate_tx_id(symbol, "sell", "DCA")
+                    
+                    self.notifier.notify_trade_close({
+                        "tx_id": tx_id,
+                        "symbol": symbol,
+                        "side": "sell",
+                        "price": data["price"],
+                        "amount": sell_amount,
+                        "profit": net_profit,
+                        "fee_paid": fee_paid,
+                        "entry_price": entry_price,
+                        "strategy": "DCA Intelligent"
+                    })
+                else:
+                    logger.warning(f"⚠️ DCA {symbol}: Orden de venta rechazada: {order}")
     
     def _run_grid_strategy(self, symbol: str, data: Dict, config: Dict) -> None:
         """Ejecuta la estrategia Grid."""
@@ -468,6 +588,18 @@ class TradingBot:
         else:
             buy_signal = None
         if buy_signal:
+            # 🧠 AI Filter: Solo consultar cuando hay señal REAL de compra Grid
+            if self.ai_advisor.is_available() and OLLAMA.get("filter_enabled", False):
+                ai_result = self.ai_advisor.analyze_trade_signal(
+                    symbol=symbol,
+                    strategy="Grid",
+                    signal_type="buy",
+                    market_data=data,
+                )
+                if not ai_result.get("approved", True):
+                    logger.info(f"🧠 AI BLOQUEÓ Grid {symbol}: {ai_result.get('reasoning', '')}")
+                    return
+            
             # grid.grids uses float logic mostly, but if order_size_usd became Decimal in future, convert
             order_size_usd = float(grid.grids[symbol]["order_size_usd"])
             order_size = order_size_usd / data["price"]
@@ -525,51 +657,49 @@ class TradingBot:
             else:
                 logger.warning(f"⚠️ Grid {symbol}: Orden no válida o rechazada: {order}")
         
-        # Verificar ventas
-        sell_signal = grid.should_exit(symbol, {}, data)
-        if sell_signal:
-            # Buscar el nivel correcto en la lista
-            level_data = next((l for l in grid.grids[symbol]["levels"] if l["level"] == sell_signal["level"]), {})
-            sell_amount = level_data.get("bought_amount", 0)
-            entry_price_level = level_data.get("bought_price", data["price"])
-            
-            profit = grid.execute_grid_sell(
-                symbol,
-                sell_signal["level"],
-                sell_signal["price"]
-            )
-            
-            # Calcular fee estimado (entrada + salida)
-            # sell_amount is Decimal, sell_signal["price"] is float. Convert to float for fee calculation.
-            estimated_fee = float(sell_signal["price"]) * float(sell_amount) * 0.002
-            # Convertir profit Decimal a float para sumar con estimated_fee (float)
-            f_profit = float(profit)
-            
-            if f_profit != 0:
-                alerts = self.risk_manager.record_trade_result(f_profit, fee_paid=estimated_fee, gross_profit=f_profit + estimated_fee)
+        # Verificar ventas (ahora should_exit retorna una LISTA de niveles)
+        sell_signals = grid.should_exit(symbol, {}, data)
+        if sell_signals:
+            for sell_signal in sell_signals:
+                # Buscar el nivel correcto en la lista
+                level_data = next((l for l in grid.grids[symbol]["levels"] if l["level"] == sell_signal["level"]), {})
+                sell_amount = level_data.get("bought_amount", 0)
+                entry_price_level = level_data.get("bought_price", data["price"])
                 
-                # Check Inefficiency Alert
-                if "inefficiency" in alerts:
-                    self.notifier.notify_inefficiency_warning(alerts["inefficiency"])
+                profit = grid.execute_grid_sell(
+                    symbol,
+                    sell_signal["level"],
+                    sell_signal["price"]
+                )
                 
-                self.stats["trades"] += 1
+                # Calcular fee estimado (entrada + salida)
+                estimated_fee = float(sell_signal["price"]) * float(sell_amount) * 0.002
+                f_profit = float(profit)
                 
-                # Notificar venta de Grid
-                # El profit devuelto por execute_grid_sell ya es NETO (según fix anterior)
-                tx_id = TransactionManager.generate_tx_id(symbol, "sell", "Grid")
-                
-                self.notifier.notify_trade_close({
-                    "tx_id": tx_id,
-                    "symbol": symbol,
-                    "side": "sell",
-                    "price": sell_signal["price"],
-                    "entry_price": entry_price_level,
-                    "amount": sell_amount,
-                    "profit": profit,
-                    "fee_paid": estimated_fee,
-                    "strategy": "Grid Trading"
-                })
-                logger.info(f"📉 Grid {symbol} - Venta nivel {sell_signal['level']}: Profit ${profit:.2f}")
+                if f_profit != 0:
+                    alerts = self.risk_manager.record_trade_result(f_profit, fee_paid=estimated_fee, gross_profit=f_profit + estimated_fee)
+                    
+                    # Check Inefficiency Alert
+                    if "inefficiency" in alerts:
+                        self.notifier.notify_inefficiency_warning(alerts["inefficiency"])
+                    
+                    self.stats["trades"] += 1
+                    
+                    # Notificar venta de Grid
+                    tx_id = TransactionManager.generate_tx_id(symbol, "sell", "Grid")
+                    
+                    self.notifier.notify_trade_close({
+                        "tx_id": tx_id,
+                        "symbol": symbol,
+                        "side": "sell",
+                        "price": sell_signal["price"],
+                        "entry_price": entry_price_level,
+                        "amount": sell_amount,
+                        "profit": profit,
+                        "fee_paid": estimated_fee,
+                        "strategy": "Grid Trading"
+                    })
+                    logger.info(f"📉 Grid {symbol} - Venta nivel {sell_signal['level']}: Profit ${profit:.2f}")
         
         # === RECENTRADO INTELIGENTE ===
         # Verificar si la grid necesita recentrarse (solo en condiciones seguras)
@@ -725,6 +855,18 @@ class TradingBot:
         # Verificar entrada
         entry_signal = tech.should_enter(symbol, data)
         if entry_signal:
+            # 🧠 AI Filter: Solo consultar cuando hay señal REAL de compra Technical
+            if self.ai_advisor.is_available() and OLLAMA.get("filter_enabled", False):
+                ai_result = self.ai_advisor.analyze_trade_signal(
+                    symbol=symbol,
+                    strategy="Technical",
+                    signal_type="buy",
+                    market_data=data,
+                )
+                if not ai_result.get("approved", True):
+                    logger.info(f"🧠 AI BLOQUEÓ Technical {symbol}: {ai_result.get('reasoning', '')}")
+                    return
+            
             position = self.risk_manager.calculate_position_size(
                 symbol,
                 data["price"],
@@ -809,8 +951,8 @@ class TradingBot:
                 try:
                     data = self.data_manager.get_market_summary(f"{asset}/USDT")
                     assets += float(amount) * float(data.get("price", 0))
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error obteniendo precio de {asset}: {e}")
         total_capital = liquid + assets
         initial = float(CAPITAL['initial_usd'])
         roi = ((total_capital - initial) / initial) * 100 if initial > 0 else 0
@@ -873,6 +1015,50 @@ class TradingBot:
                 self.notifier.notify_weekly_report(report_data)
                 self.last_weekly_check = now.date()
                 logger.info("📱 Reporte semanal enviado a Telegram")
+    
+    def _check_ai_daily_report(self) -> None:
+        """Verifica si es hora de enviar el reporte diario de IA."""
+        if not self.ai_advisor.is_available():
+            return
+        
+        now = datetime.now()
+        report_hour = OLLAMA.get("daily_report_hour", 20)
+        
+        # Enviar solo una vez al día a la hora configurada
+        if now.hour == report_hour and self.last_ai_report != now.date():
+            try:
+                logger.info("🧠 Generando reporte diario de IA...")
+                
+                # Recopilar datos
+                daily_stats = self.state_manager.get_trades_by_period(days=1)
+                portfolio_stats = self.risk_manager.get_portfolio_stats()
+                
+                market_data = {}
+                for symbol in PORTFOLIO.keys():
+                    try:
+                        market_data[symbol] = self.data_manager.get_market_summary(symbol)
+                    except Exception:
+                        pass
+                
+                portfolio_info = {
+                    "current_capital": float(portfolio_stats.get("current_capital", 0)),
+                    "roi": float(portfolio_stats.get("roi_pct", 0)),
+                }
+                
+                report = self.ai_advisor.generate_daily_report(
+                    daily_stats=daily_stats,
+                    market_data=market_data,
+                    portfolio_info=portfolio_info,
+                )
+                
+                if report:
+                    self.notifier.send(report)
+                    logger.info("🧠 Reporte diario IA enviado a Telegram")
+                
+                self.last_ai_report = now.date()
+                
+            except Exception as e:
+                logger.error(f"Error generando reporte IA: {e}")
         
     def _cleanup(self) -> None:
         """Limpieza al cerrar el bot."""
