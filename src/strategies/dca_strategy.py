@@ -379,6 +379,10 @@ class DCAIntelligentStrategy(BaseStrategy):
             "profit_pct": float(profit_pct)
         })
         
+        # === PROTECCIONES POR PAR ===
+        # Registrar resultado del trade para el sistema de protecciones
+        self.risk_manager.record_pair_trade(symbol, float(profit_pct))
+        
         # Guardar estado JSON
         self._save_state()
         

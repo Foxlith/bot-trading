@@ -65,6 +65,15 @@ class RiskManager:
         # Historial
         self.trade_history: List[Dict] = []
         self.daily_pnl: Dict[str, Decimal] = {}
+        
+        # === PROTECCIONES POR PAR ===
+        self.pair_protections_config = RISK_MANAGEMENT.get("pair_protections", {})
+        self.pair_losses: Dict[str, List[datetime]] = {}  # {symbol: [timestamps de pérdidas]}
+        self.pair_paused_until: Dict[str, datetime] = {}   # {symbol: datetime de reanudación}
+        self.pair_trade_results: Dict[str, List[float]] = {}  # {symbol: [profits recientes]}
+        
+        # === TRAILING DINÁMICO ===
+        self.dynamic_trailing_config = RISK_MANAGEMENT.get("dynamic_trailing", {})
         self.total_trades = 0
         self.winning_trades = 0
         self.losing_trades = 0
@@ -192,10 +201,15 @@ class RiskManager:
         Returns:
             Dict con trailing_stop_price, triggered, profit_protected_pct
         """
-        trailing_pct = safe_decimal(RISK_MANAGEMENT.get("trailing_stop_pct", 0.02))
         d_current = safe_decimal(current_price)
         d_high = safe_decimal(high_watermark)
         d_entry = safe_decimal(entry_price)
+        
+        # Calcular profit actual para seleccionar tier de trailing
+        current_profit_pct = (d_current - d_entry) / d_entry if d_entry > 0 else Decimal('0')
+        
+        # === TRAILING DINÁMICO ===
+        trailing_pct = self._get_dynamic_trailing_pct(float(current_profit_pct))
         
         # Actualizar high watermark si el precio actual es mayor
         new_high = max(d_high, d_current) if side == "long" else min(d_high, d_current)
@@ -215,7 +229,8 @@ class RiskManager:
             "high_watermark": float(new_high),
             "triggered": triggered,
             "profit_protected_pct": float(profit_protected),
-            "current_gain_pct": float(((d_current - d_entry) / d_entry) * 100) if d_entry > 0 else 0
+            "current_gain_pct": float(current_profit_pct * 100),
+            "trailing_pct_used": float(trailing_pct * 100),
         }
     
     def should_activate_trailing(self, current_price: float, entry_price: float, 
@@ -426,6 +441,127 @@ class RiskManager:
             "level": "alto" if score >= 5 else "medio" if score >= 3 else "bajo",
             "factors": factors,
         }
+    
+    # =========================================================================
+    # TRAILING STOP DINÁMICO
+    # =========================================================================
+    def _get_dynamic_trailing_pct(self, current_profit_pct: float) -> Decimal:
+        """
+        Selecciona el trailing % basado en cuánto profit lleva el trade.
+        A más profit → trailing más tight → protege más ganancia.
+        """
+        if not self.dynamic_trailing_config.get("enabled", False):
+            return safe_decimal(RISK_MANAGEMENT.get("trailing_stop_pct", 0.03))
+        
+        tiers = self.dynamic_trailing_config.get("tiers", [])
+        # Ordenar de mayor a menor profit para encontrar el tier correcto
+        selected_trailing = safe_decimal(RISK_MANAGEMENT.get("trailing_stop_pct", 0.03))
+        
+        for tier in sorted(tiers, key=lambda x: x["min_profit_pct"]):
+            if current_profit_pct >= tier["min_profit_pct"]:
+                selected_trailing = safe_decimal(tier["trailing_pct"])
+        
+        return selected_trailing
+    
+    # =========================================================================
+    # PROTECCIONES POR PAR
+    # =========================================================================
+    def record_pair_trade(self, symbol: str, profit: float) -> None:
+        """
+        Registra el resultado de un trade para un par específico.
+        Controla las protecciones por par.
+        """
+        if not self.pair_protections_config.get("enabled", False):
+            return
+        
+        now = datetime.now()
+        
+        # Registrar en historial de profits por par
+        if symbol not in self.pair_trade_results:
+            self.pair_trade_results[symbol] = []
+        self.pair_trade_results[symbol].append(profit)
+        # Mantener solo los últimos 20 trades por par
+        self.pair_trade_results[symbol] = self.pair_trade_results[symbol][-20:]
+        
+        if profit < 0:
+            # Registrar pérdida con timestamp
+            if symbol not in self.pair_losses:
+                self.pair_losses[symbol] = []
+            self.pair_losses[symbol].append(now)
+            
+            # Limpiar pérdidas antiguas (fuera del lookback)
+            lookback_hours = self.pair_protections_config.get("lookback_hours", 12)
+            cutoff = now - timedelta(hours=lookback_hours)
+            self.pair_losses[symbol] = [t for t in self.pair_losses[symbol] if t > cutoff]
+            
+            # Verificar si se excedió el límite de pérdidas
+            max_losses = self.pair_protections_config.get("max_losses_per_pair", 3)
+            if len(self.pair_losses[symbol]) >= max_losses:
+                pause_hours = self.pair_protections_config.get("pause_pair_hours", 6)
+                self.pair_paused_until[symbol] = now + timedelta(hours=pause_hours)
+                logger.warning(
+                    f"🛡️ PROTECCIÓN: {symbol} PAUSADO por {pause_hours}h "
+                    f"({len(self.pair_losses[symbol])} pérdidas en {lookback_hours}h)"
+                )
+                # Limpiar contador para evitar re-pausar inmediatamente al reanudar
+                self.pair_losses[symbol] = []
+        else:
+            # Reset pérdidas consecutivas en caso de ganancia
+            if symbol in self.pair_losses:
+                self.pair_losses[symbol] = []
+        
+        # Verificar rendimiento promedio (low profit protection)
+        min_trades = self.pair_protections_config.get("low_profit_min_trades", 5)
+        results = self.pair_trade_results.get(symbol, [])
+        if len(results) >= min_trades:
+            avg_profit = sum(results[-min_trades:]) / min_trades
+            threshold = self.pair_protections_config.get("low_profit_threshold_pct", -1.0)
+            if avg_profit < threshold:
+                pause_hours = self.pair_protections_config.get("pause_pair_hours", 6)
+                self.pair_paused_until[symbol] = now + timedelta(hours=pause_hours)
+                logger.warning(
+                    f"🛡️ PROTECCIÓN: {symbol} PAUSADO por bajo rendimiento "
+                    f"(avg profit: {avg_profit:.2f}% en últimos {min_trades} trades)"
+                )
+    
+    def can_trade_pair(self, symbol: str) -> Dict[str, Any]:
+        """
+        Verifica si un par específico puede operar o está pausado por protección.
+        """
+        if not self.pair_protections_config.get("enabled", False):
+            return {"can_trade": True}
+        
+        if symbol in self.pair_paused_until:
+            pause_end = self.pair_paused_until[symbol]
+            if datetime.now() < pause_end:
+                remaining = (pause_end - datetime.now()).total_seconds() / 3600
+                return {
+                    "can_trade": False,
+                    "reason": f"🛡️ {symbol} pausado por protección ({remaining:.1f}h restantes)",
+                }
+            else:
+                # Expiró la pausa, limpiar
+                del self.pair_paused_until[symbol]
+                logger.info(f"✅ PROTECCIÓN: {symbol} reanudado tras pausa")
+        
+        return {"can_trade": True}
+    
+    def get_pair_protection_status(self) -> Dict[str, Any]:
+        """
+        Retorna el estado de protecciones de todos los pares.
+        Útil para reportes de Telegram.
+        """
+        status = {}
+        now = datetime.now()
+        for symbol, pause_end in self.pair_paused_until.items():
+            if now < pause_end:
+                remaining = (pause_end - now).total_seconds() / 3600
+                status[symbol] = {
+                    "paused": True,
+                    "remaining_hours": round(remaining, 1),
+                    "resume_at": pause_end.strftime("%H:%M"),
+                }
+        return status
 
 
 # Singleton

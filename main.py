@@ -321,10 +321,16 @@ class TradingBot:
         
         logger.debug(f"📊 {symbol}: ${data['price']:.2f} | RSI:{data['rsi']:.0f} | {data['trend']}")
         
-        # ===== FILTRO EMA 200 + SELL-ONLY MODE =====
+        # ===== FILTRO EMA 200 + SELL-ONLY MODE + PROTECCIONES =====
         ema_200 = float(data.get("ema_200", 0))
         current_price = float(data.get("price", 0))
         is_sell_only = config.get("sell_only", False)
+        
+        # Verificar protecciones por par
+        pair_risk_check = self.risk_manager.can_trade_pair(symbol)
+        if not pair_risk_check["can_trade"]:
+            is_sell_only = True
+            logger.debug(f"🛡️ {symbol}: Modo SELL-ONLY forzado ({pair_risk_check['reason']})")
         
         # Determinar si podemos comprar (Grid & Technical)
         can_buy = True

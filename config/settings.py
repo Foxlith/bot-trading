@@ -94,8 +94,27 @@ RISK_MANAGEMENT = {
     # Take profit por defecto
     "default_take_profit_pct": 0.06,  # 6%
     
-    # Trailing stop
-    "trailing_stop_pct": 0.03,  # 3% (optimizado, antes 2%)
+    # =========================================================================
+    # TRAILING STOP DINÁMICO (inspirado en Freqtrade)
+    # =========================================================================
+    # El trailing se ajusta según cuánto profit llevas:
+    # - Profit bajo  → trailing amplio (dejar respirar)
+    # - Profit alto  → trailing tight (proteger ganancia)
+    "trailing_stop_pct": 0.03,  # 3% default (fallback)
+    "dynamic_trailing": {
+        "enabled": True,
+        # Tiers: [profit_mínimo, trailing_pct]
+        # Si el profit es > 1% → trailing 2.5%
+        # Si el profit es > 3% → trailing 2.0%
+        # Si el profit es > 5% → trailing 1.5%
+        # Si el profit es > 8% → trailing 1.0% (muy tight, proteger max)
+        "tiers": [
+            {"min_profit_pct": 0.01, "trailing_pct": 0.025},
+            {"min_profit_pct": 0.03, "trailing_pct": 0.020},
+            {"min_profit_pct": 0.05, "trailing_pct": 0.015},
+            {"min_profit_pct": 0.08, "trailing_pct": 0.010},
+        ],
+    },
     
     # Máximo drawdown permitido antes de pausar
     "max_drawdown_pct": 0.15,  # 15%
@@ -111,6 +130,21 @@ RISK_MANAGEMENT = {
     
     # Tiempo de pausa en horas
     "pause_duration_hours": 24,
+    
+    # =========================================================================
+    # PROTECCIONES POR PAR (inspirado en Freqtrade)
+    # =========================================================================
+    # Pausa pares individuales si pierden demasiado, sin afectar al resto
+    "pair_protections": {
+        "enabled": True,
+        # Si un par tiene X pérdidas en Y horas → pausar ese par Z horas
+        "max_losses_per_pair": 3,        # 3 pérdidas consecutivas en un par
+        "lookback_hours": 12,            # Dentro de las últimas 12 horas
+        "pause_pair_hours": 6,           # Pausar ese par por 6 horas
+        # Bajo rendimiento: si un par tiene <X% profit en Y trades → pausar
+        "low_profit_min_trades": 5,      # Mínimo 5 trades para evaluar
+        "low_profit_threshold_pct": -1.0, # Si el profit promedio es < -1%
+    },
 }
 
 # =============================================================================

@@ -337,7 +337,7 @@ class TechnicalStrategy(BaseStrategy):
                 "pnl_pct": pnl_pct * 100,
             }
         
-        # Trailing stop mejorado con high watermark
+        # Trailing stop mejorado con TRAILING DINÁMICO
         # Solo activar si hay al menos 2% de ganancia
         if pnl_pct > 0.02:
             # Obtener o inicializar high watermark
@@ -349,16 +349,26 @@ class TechnicalStrategy(BaseStrategy):
                 pos["high_watermark"] = current_price
                 logger.debug(f"📈 {symbol} nuevo high watermark: ${current_price:.2f}")
             
-            # Calcular trailing stop desde el high watermark
-            trailing_pct = RISK_MANAGEMENT.get("trailing_stop_pct", 0.02)
-            new_stop = pos["high_watermark"] * (1 - trailing_pct)
+            # === TRAILING DINÁMICO ===
+            # Usa el risk_manager para obtener el trailing % adaptado al profit
+            trailing_result = self.risk_manager.calculate_trailing_stop(
+                current_price=current_price,
+                high_watermark=pos["high_watermark"],
+                entry_price=entry_price,
+                side="long"
+            )
+            new_stop = trailing_result["trailing_stop_price"]
             
             # Solo subir el stop, nunca bajarlo
             if new_stop > pos.get("stop_loss", 0):
                 old_stop = pos.get("stop_loss", 0)
                 pos["stop_loss"] = new_stop
+                pos["high_watermark"] = trailing_result["high_watermark"]
                 profit_protected = ((new_stop - entry_price) / entry_price) * 100
-                logger.info(f"🎯 {symbol} TRAILING STOP: ${old_stop:.2f} → ${new_stop:.2f} (Protege +{profit_protected:.1f}%)")
+                logger.info(
+                    f"🎯 {symbol} TRAILING DINÁMICO: ${old_stop:.2f} → ${new_stop:.2f} "
+                    f"(Protege +{profit_protected:.1f}%, trailing {trailing_result['trailing_pct_used']:.1f}%)"
+                )
             
             # Verificar si el trailing stop fue activado
             if current_price <= pos.get("stop_loss", 0):
@@ -465,6 +475,9 @@ class TechnicalStrategy(BaseStrategy):
             "duration": (datetime.now() - pos["opened_at"]).total_seconds() / 3600,
             "timestamp": datetime.now().isoformat(),
         })
+        
+        # === PROTECCIONES POR PAR ===
+        self.risk_manager.record_pair_trade(symbol, float(profit_pct))
         
         # Guardar cierre en DB
         if "id" in pos:
