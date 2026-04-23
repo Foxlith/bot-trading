@@ -81,6 +81,10 @@ class TelegramBotInteractivo:
         self.app.add_handler(CommandHandler("ia_analisis", self.cmd_ai_analisis))
         self.app.add_handler(CommandHandler("ia", self.cmd_ai_analisis))
         
+        # Comando Gráficos
+        self.app.add_handler(CommandHandler("grafico", self.cmd_grafico))
+        self.app.add_handler(CommandHandler("graficos", self.cmd_grafico))
+        
         logger.info("🤖 Comandos de Telegram registrados")
         
         # Iniciar polling
@@ -126,11 +130,37 @@ class TelegramBotInteractivo:
 🤖 /ai_analisis - Análisis completo por IA
 🤖 /ai - Atajo para /ai_analisis
 
+<b>═══ 📊 VISUALIZACIÓN ═══</b>
+📈 /grafico - Gráfico de rendimiento diario
+
 ❓ /help - Esta lista de comandos
 
 <i>Escribe cualquier comando para comenzar.</i>
 """
         await update.message.reply_text(message.strip(), parse_mode="HTML")
+
+    async def cmd_grafico(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Comando /grafico - Genera y envía un gráfico de rendimiento."""
+        try:
+            await update.message.reply_text("🔄 Generando gráfico de rendimiento...")
+            
+            from src.utils.chart_generator import get_chart_generator
+            chart_gen = get_chart_generator()
+            chart_path = chart_gen.generate_daily_performance_chart()
+            
+            if chart_path and os.path.exists(chart_path):
+                with open(chart_path, 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption="📊 <b>Gráfico de Rendimiento Diario</b>\nCrecimiento de capital y profit por activo.",
+                        parse_mode="HTML"
+                    )
+            else:
+                await update.message.reply_text("ℹ️ No hay suficientes datos (trades cerrados) para generar un gráfico.")
+                
+        except Exception as e:
+            logger.error(f"Error en cmd_grafico: {e}")
+            await update.message.reply_text(f"❌ Error al generar gráfico: {str(e)}")
     
     async def cmd_ayuda(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Comando /ayuda - Lista de comandos."""

@@ -1060,6 +1060,21 @@ class TradingBot:
                 if report:
                     self.notifier.send(report)
                     logger.info("🧠 Reporte diario IA enviado a Telegram")
+                    
+                    # Generar y enviar gráfico diario
+                    try:
+                        from src.utils.chart_generator import get_chart_generator
+                        chart_gen = get_chart_generator()
+                        chart_path = chart_gen.generate_daily_performance_chart()
+                        
+                        if chart_path:
+                            self.notifier.send_photo(
+                                photo_path=chart_path, 
+                                caption="📊 <b>Gráfico de Rendimiento Diario</b>\nCrecimiento de capital y profit por activo."
+                            )
+                            logger.info("📊 Gráfico diario enviado a Telegram")
+                    except Exception as e:
+                        logger.error(f"Error generando gráfico diario: {e}")
                 
                 self.last_ai_report = now.date()
                 

@@ -113,6 +113,38 @@ class TelegramNotifier:
             asyncio.set_event_loop(loop)
         
         return loop.run_until_complete(self._send_message(message))
+        
+    async def _send_photo(self, photo_path: str, caption: str = "") -> bool:
+        """Envía una foto de forma asíncrona."""
+        if not self.enabled or not self.bot:
+            logger.info(f"📱 [TELEGRAM MOCK PHOTO]: {photo_path} - {caption[:50]}...")
+            return True
+        
+        try:
+            with open(photo_path, 'rb') as photo:
+                await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=photo,
+                    caption=caption,
+                    parse_mode="HTML"
+                )
+            return True
+        except TelegramError as e:
+            logger.error(f"Error enviando foto por Telegram: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error leyendo archivo de foto {photo_path}: {e}")
+            return False
+            
+    def send_photo(self, photo_path: str, caption: str = "") -> bool:
+        """Envía una foto (wrapper síncrono)."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(self._send_photo(photo_path, caption))
     
     def notify_trade_open(self, trade: Dict[str, Any]) -> None:
         """
