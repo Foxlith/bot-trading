@@ -18,10 +18,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from config.settings import TELEGRAM, PORTFOLIO, CAPITAL, STRATEGIES
+from config.settings import TELEGRAM, PORTFOLIO, CAPITAL, STRATEGIES, OLLAMA
 from src.core.data_manager import get_data_manager
 from src.core.state_manager import get_state_manager
 from src.core.exchange_manager import get_exchange
+from src.ai.ollama_advisor import get_ai_advisor
 
 
 class TelegramBotInteractivo:
@@ -42,6 +43,7 @@ class TelegramBotInteractivo:
         self.data_manager = get_data_manager()
         self.state_manager = get_state_manager()
         self.exchange = get_exchange()
+        self.ai_advisor = get_ai_advisor()
         
         self.app: Optional[Application] = None
         
@@ -72,6 +74,12 @@ class TelegramBotInteractivo:
         self.app.add_handler(CommandHandler("mejores", self.cmd_mejores))
         self.app.add_handler(CommandHandler("peores", self.cmd_peores))
         self.app.add_handler(CommandHandler("fees", self.cmd_fees))
+        
+        # Comando IA
+        self.app.add_handler(CommandHandler("ai_analisis", self.cmd_ai_analisis))
+        self.app.add_handler(CommandHandler("ai", self.cmd_ai_analisis))
+        self.app.add_handler(CommandHandler("ia_analisis", self.cmd_ai_analisis))
+        self.app.add_handler(CommandHandler("ia", self.cmd_ai_analisis))
         
         logger.info("🤖 Comandos de Telegram registrados")
         
@@ -113,6 +121,10 @@ class TelegramBotInteractivo:
 🏆 /mejores - Top 3 mejores trades
 📉 /peores - Top 3 peores trades
 💸 /fees - Comisiones pagadas
+
+<b>═══ 🧠 INTELIGENCIA ARTIFICIAL ═══</b>
+🤖 /ai_analisis - Análisis completo por IA
+🤖 /ai - Atajo para /ai_analisis
 
 ❓ /help - Esta lista de comandos
 
@@ -439,10 +451,10 @@ class TelegramBotInteractivo:
             tech_positions = tech_state.get("positions", {})
             tech_info = []
             for symbol, pos in tech_positions.items():
-                entry = pos.get("entry_price", 0)
-                amount = pos.get("amount", 0)
-                sl = pos.get("stop_loss", 0)
-                tp = pos.get("take_profit", 0)
+                entry = float(pos.get("entry_price", 0) or 0)
+                amount = float(pos.get("amount", 0) or 0)
+                sl = float(pos.get("stop_loss", 0) or 0)
+                tp = float(pos.get("take_profit", 0) or 0)
                 tech_info.append(f"""
 └ <b>{symbol.replace('/USDT', '')}:</b> {amount:.8f}
   └ Entrada: ${entry:.2f}
@@ -746,6 +758,105 @@ class TelegramBotInteractivo:
             await update.message.reply_text(message.strip(), parse_mode="HTML")
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {str(e)}")
+    
+    # =========================================================================
+    # COMANDOS DE INTELIGENCIA ARTIFICIAL
+    # =========================================================================
+    
+    async def cmd_ai_analisis(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Comando /ai_analisis - Análisis completo del portafolio por IA."""
+        try:
+            if not self.ai_advisor.is_available():
+                await update.message.reply_text(
+                    "🧠 <b>AI Advisor no disponible</b>\n\n"
+                    "Verifica que:\n"
+                    "1. Ollama esté corriendo\n"
+                    "2. El modelo esté instalado: <code>ollama pull qwen3:8b</code>\n"
+                    "3. OLLAMA.enabled = True en settings.py",
+                    parse_mode="HTML"
+                )
+                return
+            
+            await update.message.reply_text("🧠 Generando análisis con IA... (esto puede tardar 15-30 segundos)")
+            
+            # Recopilar datos de mercado
+            portfolio_data = {}
+            for symbol in PORTFOLIO.keys():
+                try:
+                    portfolio_data[symbol] = self.data_manager.get_market_summary(symbol)
+                except Exception as e:
+                    logger.warning(f"Error getting data for {symbol}: {e}")
+                    portfolio_data[symbol] = {"error": str(e)}
+            
+            # Estadísticas de trading
+            trade_stats = self.state_manager.get_trade_stats()
+            
+            # Capital info
+            balance = self.exchange.get_balance()
+            liquid_usdt = float(balance.get("USDT", 0))
+            assets_value = 0
+            for asset, amount in balance.items():
+                if asset != "USDT" and float(amount) > 0:
+                    symbol = f"{asset}/USDT"
+                    try:
+                        data = self.data_manager.get_market_summary(symbol)
+                        assets_value += float(amount) * float(data.get("price", 0))
+                    except:
+                        pass
+            
+            total_capital = liquid_usdt + assets_value
+            initial_capital = float(CAPITAL['initial_usd'])
+            pnl = total_capital - initial_capital
+            roi = (pnl / initial_capital) * 100 if initial_capital > 0 else 0
+            
+            capital_info = {
+                "initial": initial_capital,
+                "current": total_capital,
+                "pnl": pnl,
+                "roi": roi,
+            }
+            
+            # Generar análisis
+            analysis = self.ai_advisor.analyze_portfolio(
+                portfolio_data=portfolio_data,
+                trade_stats=trade_stats,
+                capital_info=capital_info,
+            )
+            
+            # Enviar resultado (dividir si es muy largo)
+            header = f"🧠 <b>═══ ANÁLISIS IA ═══</b>\n<i>Modelo: {self.ai_advisor.model}</i>\n\n"
+            
+            # Telegram tiene límite de 4096 caracteres
+            full_message = header + analysis
+            
+            if len(full_message) <= 4096:
+                await update.message.reply_text(full_message, parse_mode="HTML")
+            else:
+                # Dividir en chunks
+                await update.message.reply_text(header, parse_mode="HTML")
+                
+                # Enviar el análisis en partes
+                for i in range(0, len(analysis), 4000):
+                    chunk = analysis[i:i+4000]
+                    try:
+                        await update.message.reply_text(chunk, parse_mode="HTML")
+                    except:
+                        # Si falla HTML, enviar sin formato
+                        await update.message.reply_text(chunk)
+            
+            # Mostrar stats del AI advisor
+            stats = self.ai_advisor.get_stats()
+            stats_msg = (
+                f"\n📊 <b>Stats AI:</b> {stats['queries']} consultas | "
+                f"✅ {stats['approvals']} aprobadas | "
+                f"❌ {stats['rejections']} rechazadas | "
+                f"⏱️ {stats['avg_response_time']:.1f}s promedio"
+            )
+            await update.message.reply_text(stats_msg, parse_mode="HTML")
+            
+        except Exception as e:
+            logger.error(f"Error en cmd_ai_analisis: {e}")
+            await update.message.reply_text(f"❌ Error generando análisis IA: {str(e)}")
 
 
 async def main():

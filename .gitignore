@@ -43,9 +43,16 @@ env/
 # Logs y datos
 logs/
 data/
+data_cache/
 *.log
 *.db
 *.sqlite
+
+# Resultados generados
+results/
+
+# Archivos temporales
+tmp_*
 
 # Backups
 backups/

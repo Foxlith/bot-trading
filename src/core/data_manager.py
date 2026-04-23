@@ -127,8 +127,8 @@ class DataManager:
         Returns:
             Dict con precio actual, cambio %, indicadores clave
         """
-        ticker = self.exchange.get_ticker(symbol)
-        df = self.get_market_data(symbol, "1h", 100)
+        # FIX Bug 2: Pedir 250 velas (antes 100) para que EMA 200 no sea NaN
+        df = self.get_market_data(symbol, "1h", 250)
         
         if df.empty:
             return {"error": "No hay datos disponibles"}
@@ -137,13 +137,38 @@ class DataManager:
         last = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else last
         
+        # FIX Bug 7: Usar precio del OHLCV como base, ticker solo como enriquecimiento
+        # get_ticker se llama solo si necesitamos datos de 24h (high/low/volume)
+        # El precio actual se toma del close de la última vela para evitar doble API call
+        current_price = float(last["close"])
+        
+        # Solo llamar a ticker si no está en cache reciente (aprovecha cache de 5min del exchange)
+        try:
+            ticker = self.exchange.get_ticker(symbol)
+            ticker_price = ticker.get("last", current_price)
+            change_24h = ticker.get("change_pct", 0)
+            high_24h = ticker.get("high", 0)
+            low_24h = ticker.get("low", 0)
+            volume_24h = ticker.get("volume", 0)
+        except Exception:
+            ticker_price = current_price
+            change_24h = 0
+            high_24h = 0
+            low_24h = 0
+            volume_24h = 0
+        
+        # Manejar EMA200 NaN: si aún no hay suficientes datos, usar 0
+        ema_200 = last.get("ema_200", 0)
+        if pd.isna(ema_200):
+            ema_200 = 0
+        
         return {
             "symbol": symbol,
-            "price": ticker.get("last", last["close"]),
-            "change_24h": ticker.get("change_pct", 0),
-            "high_24h": ticker.get("high", 0),
-            "low_24h": ticker.get("low", 0),
-            "volume_24h": ticker.get("volume", 0),
+            "price": ticker_price,
+            "change_24h": change_24h,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "volume_24h": volume_24h,
             "rsi": round(last.get("rsi", 50), 2),
             "macd": last.get("macd", 0),
             "macd_signal": last.get("macd_signal", 0),
@@ -154,7 +179,8 @@ class DataManager:
             "trend": self._get_trend(last),
             "atr": round(last.get("atr", 0), 4),
             "volatility": round(last.get("atr", 0), 4),
-            "ema_200": last.get("ema_200", 0),
+            "ema_50": last.get("ema_50", 0),
+            "ema_200": ema_200,
         }
     
     def _get_bb_position(self, row: pd.Series) -> str:

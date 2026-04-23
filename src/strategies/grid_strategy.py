@@ -14,7 +14,8 @@ import sys
 sys.path.insert(0, str(__file__).replace("\\src\\strategies\\grid_strategy.py", ""))
 
 from src.strategies.base_strategy import BaseStrategy, StrategySignal
-from config.settings import STRATEGIES, RISK_MANAGEMENT
+from datetime import datetime, timedelta
+from config.settings import STRATEGIES, RISK_MANAGEMENT, PORTFOLIO
 from src.core.state_manager import get_state_manager
 
 # Precisión financiera
@@ -222,30 +223,17 @@ class GridTradingStrategy(BaseStrategy):
         unrealized_pnl = total_current_value - total_invested
         unrealized_pnl_pct = (unrealized_pnl / total_invested * 100) if total_invested > Decimal('0') else Decimal('0')
         
-        # STOP-LOSS PROGRESIVO (antes: cierre total a -10%, ahora más inteligente)
-        # Nivel 1: -8% → cerrar el nivel con mayor pérdida (parcial)
-        # Nivel 2: -20% → cerrar TODO (crash real de mercado)
-        partial_stop = unrealized_pnl_pct < Decimal('-8') and unrealized_pnl_pct >= Decimal('-20')
-        emergency_stop = unrealized_pnl_pct < Decimal('-20')
+        # FIX 3: Stop-loss desactivado — la Grid espera recuperación del mercado
+        # Antes: cerrar a -8% (parcial) y -20% (total) → materializaba pérdidas constantemente
+        # Ahora: solo loguear la pérdida latente, NO cerrar posiciones
+        partial_stop = False  # Desactivado: evita cierres a pérdidas por caídas temporales
+        emergency_stop = False  # Desactivado: el mercado siempre se recupera en el largo plazo
         
-        # Encontrar el nivel con MAYOR pérdida para cierre parcial
         worst_level = None
-        if partial_stop:
-            worst_loss = Decimal('0')
-            for level in grid["levels"]:
-                if level["status"] == "bought":
-                    buy_price = safe_decimal(level.get("buy_executed_price", level.get("buy_price", 0)))
-                    amount = safe_decimal(level.get("amount", 0))
-                    if amount > Decimal('0') and buy_price > Decimal('0'):
-                        level_loss = (current_price_d - buy_price) * amount
-                        if level_loss < worst_loss:
-                            worst_loss = level_loss
-                            worst_level = level
-            if worst_level:
-                logger.warning(f"⚠️ GRID STOP PARCIAL: {symbol} pérdida latente {unrealized_pnl_pct:.2f}%. Cerrando nivel {worst_level['level']} (peor posición)")
         
-        if emergency_stop:
-            logger.warning(f"🛑 GRID STOP-LOSS TOTAL: {symbol} pérdida latente {unrealized_pnl_pct:.2f}% > -20% (CRASH)")
+        # Solo loguear como advertencia informativa (sin cerrar)
+        if unrealized_pnl_pct < Decimal('-8'):
+            logger.debug(f"📊 Grid {symbol} pérdida latente {unrealized_pnl_pct:.1f}% — manteniendo posiciones (stop-loss desactivado)")
         
         return {
             "symbol": symbol,
@@ -264,22 +252,24 @@ class GridTradingStrategy(BaseStrategy):
     
     def should_enter(self, symbol: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Verifica si hay órdenes de compra por ejecutar."""
+        # FIX 1: Verificar sell_only ANTES de analizar — SOL no debe comprar nunca
+        portfolio_config = PORTFOLIO.get(symbol, {})
+        if portfolio_config.get("sell_only", False):
+            logger.debug(f"🔲 Grid {symbol}: sell_only activo → solo ventas permitidas")
+            return None
+        
         analysis = self.analyze(symbol, data)
         
         if analysis.get("needs_setup"):
             return None
         
         # Filtro de Tendencia (EMA 50 > EMA 200) y Volatilidad
-        # Solo comprar si estamos en tendencia alcista o lateral, evitar caídas libres
         ema_50 = safe_decimal(data.get("ema_50", 0))
         ema_200 = safe_decimal(data.get("ema_200", 0))
         price = safe_decimal(data.get("price", 0))
         atr = safe_decimal(data.get("atr", 0))
         
         if ema_50 > Decimal('0') and ema_200 > Decimal('0') and ema_50 < ema_200:
-             # Permitir compras solo si el precio está muy por debajo (reboteoversold)
-             # O si estamos muy cerca del soporte de la grid
-             # Por ahora, ser conservadores:
              logger.debug(f"🔲 Grid {symbol} pausada: Tendencia BAJISTA (EMA 50 < EMA 200)")
              return None
 
@@ -305,8 +295,8 @@ class GridTradingStrategy(BaseStrategy):
             "reason": f"Grid nivel {level['level']} alcanzado"
         }
     
-    def should_exit(self, symbol: str, position: Dict, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Verifica si hay órdenes de venta por ejecutar."""
+    def should_exit(self, symbol: str, position: Dict, data: Dict[str, Any]) -> Optional[list]:
+        """Verifica si hay órdenes de venta por ejecutar. Retorna LISTA de niveles listos."""
         analysis = self.analyze(symbol, data)
         
         if analysis.get("needs_setup"):
@@ -316,16 +306,18 @@ class GridTradingStrategy(BaseStrategy):
         if not triggered_sells:
             return None
         
-        # Tomar el nivel más alto disponible
-        level = max(triggered_sells, key=lambda x: x["sell_price"])
+        # FIX Bug 3: Retornar TODOS los niveles listos para vender, no solo 1
+        sell_signals = []
+        for level in triggered_sells:
+            sell_signals.append({
+                "action": "sell",
+                "symbol": symbol,
+                "price": level["sell_price"],
+                "level": level["level"],
+                "reason": f"Grid nivel {level['level']} take profit"
+            })
         
-        return {
-            "action": "sell",
-            "symbol": symbol,
-            "price": level["sell_price"],
-            "level": level["level"],
-            "reason": f"Grid nivel {level['level']} take profit"
-        }
+        return sell_signals
     
     def execute_grid_buy(self, symbol: str, level_num: int, amount: float, price: float) -> None:
         """Registra una compra en un nivel de la grid."""
@@ -450,7 +442,7 @@ class GridTradingStrategy(BaseStrategy):
         logger.info(f"🔄 Grid {symbol} recentrada: ${old_center:.2f} -> ${new_center:.2f}")
     
     def intelligent_recenter_grid(self, symbol: str, current_price: float, 
-                                   trend: str, data_manager=None) -> Dict[str, Any]:
+                               trend: str, data_manager=None) -> Dict[str, Any]:
         """
         Recentrado inteligente con filtros de seguridad.
         
@@ -497,7 +489,7 @@ class GridTradingStrategy(BaseStrategy):
         # REGLA 2: Cooldown de 24h
         last_recenter = grid.get("last_recenter")
         if last_recenter:
-            from datetime import datetime, timedelta
+            # Quitamos el import local causante del UnboundLocalError
             if datetime.now() - last_recenter < timedelta(hours=24):
                 hours_left = 24 - (datetime.now() - last_recenter).total_seconds() / 3600
                 return {

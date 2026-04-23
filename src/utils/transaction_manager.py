@@ -105,8 +105,8 @@ class TransactionManager:
 🔖 <b>ID Operación:</b> <code>{payload['tx_id']}</code>
 📊 <b>Par:</b> {payload['symbol']}
 📌 <b>Tipo:</b> {payload['side'].upper()}
-💰 <b>Precio:</b> ${payload['price']:,.2f}
-📦 <b>Cantidad:</b> {payload['amount']:.8f}
+💰 <b>Precio:</b> ${float(payload['price']):,.2f}
+📦 <b>Cantidad:</b> {float(payload['amount']):.8f}
 {fee_text}{net_invest_text}
 🎯 <b>Estrategia:</b> {payload['strategy']}{profit_text}{reason_text}
 

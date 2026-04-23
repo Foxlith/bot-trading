@@ -33,10 +33,10 @@ EXCHANGE = {
 # CONFIGURACIÓN DE CAPITAL Y APORTES
 # =============================================================================
 CAPITAL = {
-    "initial_cop": 800_000,  # Total invertido en pesos colombianos (300k + 500k)
+    "initial_cop": 1_200_000,  # Total invertido en pesos colombianos
     "monthly_contribution_cop": 300_000,
     "usd_cop_rate": 3_652,  # TRM actual COP/USD
-    "initial_usd": 211.92,  # $75 + $136.92 (500k COP)
+    "initial_usd": 300,  # Capital inicial para paper trading
     "monthly_contribution_usd": 82,
 }
 
@@ -119,9 +119,9 @@ RISK_MANAGEMENT = {
 STRATEGIES = {
     "grid_trading": {
         "enabled": True,
-        "grid_levels": 5,           # REDUCIDO: 5 niveles (antes 10) = menos exposición
-        "grid_spacing_pct": 0.02,   # SUBIDO: 2% entre niveles (antes 0.5%) = grid cubre 10% de rango
-        "take_profit_pct": 0.03,    # 3% profit target = mayor margen neto después de fees
+        "grid_levels": 7,            # FIX: 7 niveles (antes 44 → $110 comprometidos con $222 capital)
+        "grid_spacing_pct": 0.015,   # FIX: 1.5% entre niveles (antes 25.3% → ciclos imposibles de completar)
+        "take_profit_pct": 0.03,    # 3% profit target
         "allocation_pct": 0.30,     # 30% del capital para esta estrategia
         "min_volatility_atr": 0.3,  # 0.3% ATR mínimo
         "order_size_usd": 2.50,     # Tamaño fijo por nivel $2.50
@@ -188,9 +188,23 @@ LOGGING = {
 }
 
 # =============================================================================
+# IA LOCAL (OLLAMA) - Analista de Mercado Inteligente
+# =============================================================================
+OLLAMA = {
+    "enabled": True,                          # Activar/desactivar IA
+    "base_url": "http://localhost:11434",      # URL de Ollama
+    "model": "qwen2.5:7b",                    # Modelo para trading (mejor análisis y JSON que llama3.1)
+    "timeout_seconds": 30,                     # Timeout por consulta
+    "filter_enabled": True,                    # Si True, IA puede BLOQUEAR trades
+    "min_confidence": 5,                       # Confianza mínima para aprobar trade (1-10)
+    "daily_report_hour": 20,                   # Hora para enviar reporte diario (20 = 8PM)
+    "cache_minutes": 5,                        # Cache de respuestas (evita sobrecargar)
+}
+
+# =============================================================================
 # MODO DE OPERACIÓN
 # =============================================================================
 OPERATION_MODE = {
     "mode": "paper",  # "paper" para simulación, "live" para real
-    "paper_balance_usd": 75,  # Balance inicial en paper trading
+    "paper_balance_usd": 300,  # Balance inicial en paper trading
 }

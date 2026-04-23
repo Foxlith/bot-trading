@@ -131,6 +131,7 @@ class ExchangeManager:
                 "sandbox": self.testnet,
                 "options": EXCHANGE["options"],
                 "enableRateLimit": True,
+                "timeout": 30000,  # 30 segundos timeout
             }
             
             self.exchange = exchange_class(config)
@@ -142,6 +143,7 @@ class ExchangeManager:
             if self.paper_mode:
                 self.market_exchange = exchange_class({
                     "enableRateLimit": True,
+                    "timeout": 30000,  # 30 segundos timeout
                     # Sin API keys para acceso público
                 })
                 self.market_exchange.load_markets()
@@ -313,10 +315,19 @@ class ExchangeManager:
             available = self.paper_balance.get(quote, Decimal('0'))
             
             if available >= total_cost:
+                # === VALIDACIÓN: Snapshot ANTES ===
+                usdt_before = float(self.paper_balance.get(quote, Decimal('0')))
+                asset_before = float(self.paper_balance.get(base, Decimal('0')))
+                
                 self.paper_balance[quote] -= total_cost
                 self.paper_balance[base] = self.paper_balance.get(base, Decimal('0')) + d_amount
                 
+                # === VALIDACIÓN: Snapshot DESPUÉS ===
+                usdt_after = float(self.paper_balance.get(quote, Decimal('0')))
+                asset_after = float(self.paper_balance.get(base, Decimal('0')))
+                
                 logger.info(f"📝 [PAPER] Compra: {d_amount} {base} @ {d_price} {quote} | Costo total: {total_cost} (Fee incluido)")
+                logger.info(f"   ✅ VALIDACIÓN: {quote} ${usdt_before:.2f} → ${usdt_after:.2f} (-${float(total_cost):.2f}) | {base} {asset_before:.6f} → {asset_after:.6f} (+{float(d_amount):.6f})")
                 self._save_paper_wallet()
             else:
                 logger.error(f"❌ BALANCE INSUFICIENTE: Req {total_cost} {quote} vs Disp {available} {quote}")
@@ -333,13 +344,23 @@ class ExchangeManager:
                 d_amount = available_asset
 
             if available_asset >= d_amount:
+                # === VALIDACIÓN: Snapshot ANTES ===
+                usdt_before = float(self.paper_balance.get(quote, Decimal('0')))
+                asset_before = float(self.paper_balance.get(base, Decimal('0')))
+                
                 self.paper_balance[base] -= d_amount
                 
                 revenue = (d_amount * d_price).quantize(MONEY_PRECISION, rounding=ROUND_DOWN)
                 revenue_after_fee = (revenue * (Decimal('1') - FEE_RATE)).quantize(MONEY_PRECISION, rounding=ROUND_DOWN)
                 
                 self.paper_balance[quote] = self.paper_balance.get(quote, Decimal('0')) + revenue_after_fee
+                
+                # === VALIDACIÓN: Snapshot DESPUÉS ===
+                usdt_after = float(self.paper_balance.get(quote, Decimal('0')))
+                asset_after = float(self.paper_balance.get(base, Decimal('0')))
+                
                 logger.info(f"📝 [PAPER] Venta: {d_amount} {base} @ {d_price} {quote} | Recibido: {revenue_after_fee} (Fee descontado)")
+                logger.info(f"   ✅ VALIDACIÓN: {quote} ${usdt_before:.2f} → ${usdt_after:.2f} (+${float(revenue_after_fee):.2f}) | {base} {asset_before:.6f} → {asset_after:.6f} (-{float(d_amount):.6f})")
                 self._save_paper_wallet()
             else:
                 logger.error(f"❌ BALANCE INSUFICIENTE: Req {d_amount} {base} vs Disp {available_asset} {base}")

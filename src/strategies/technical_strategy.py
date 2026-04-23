@@ -265,7 +265,7 @@ class TechnicalStrategy(BaseStrategy):
                     return {
                         "action": "buy",
                         "symbol": symbol,
-                        "price": float(price_d), # Return float for compatibility with main loop execution but calculated with Decimal
+                        "price": float(price_d),
                         "score": analysis["score"],
                         "stop_loss": float(stop_loss),
                         "take_profit": float(take_profit),
@@ -299,14 +299,15 @@ class TechnicalStrategy(BaseStrategy):
         
         pos = self.positions[symbol]
         analysis = self.analyze(symbol, data)
-        current_price = analysis["price"]
-        entry_price = pos["entry_price"]
+        current_price = float(analysis["price"])
+        entry_price = float(pos["entry_price"])
         
         # Calcular profit/loss actual
         pnl_pct = (current_price - entry_price) / entry_price
         
         # Check stop loss
-        if current_price <= pos.get("stop_loss", 0):
+        stop_loss = float(pos.get("stop_loss", 0))
+        if current_price <= stop_loss and stop_loss > 0:
             return {
                 "action": "sell",
                 "symbol": symbol,
@@ -316,7 +317,8 @@ class TechnicalStrategy(BaseStrategy):
             }
         
         # Check take profit
-        if current_price >= pos.get("take_profit", float("inf")):
+        take_profit = float(pos.get("take_profit", float("inf")))
+        if current_price >= take_profit:
             return {
                 "action": "sell",
                 "symbol": symbol,

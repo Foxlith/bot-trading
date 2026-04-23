@@ -86,6 +86,11 @@ class RiskManager:
             self.winning_trades = portfolio.get("winning_trades", 0)
             self.losing_trades = portfolio.get("losing_trades", 0)
             
+            # FIX: Sincronizar daily_start_capital con el capital REAL restaurado
+            # Sin esto, daily_start_capital quedaba en el capital inicial ($75)
+            # causando un falso drawdown diario gigante al arrancar.
+            self.daily_start_capital = self.current_capital
+            
             if self.current_capital != self.initial_capital:
                 logger.info(f"📂 Risk Manager: Estado restaurado - Capital: ${self.current_capital:.2f}")
     
