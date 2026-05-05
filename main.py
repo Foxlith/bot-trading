@@ -443,16 +443,23 @@ class TradingBot:
                 current_price = float(data.get("price", 0))
                 profit_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
                 
-                # Cooldown de 4h (alineado con el intervalo de compra DCA)
+                # Cooldown dinámico basado en ganancias (monitoreo acelerado)
                 ai_sell_key = f"ai_sell_{symbol}"
                 last_ai_eval = self._ai_sell_cooldowns.get(ai_sell_key)
+                
+                if profit_pct >= 10.0:
+                    cooldown_hours = 0.5  # 30 mins si hay mucha ganancia
+                elif profit_pct >= 5.0:
+                    cooldown_hours = 1.0  # 1 hora
+                else:
+                    cooldown_hours = 4.0  # 4 horas (normal)
+                    
                 cooldown_ok = (
                     last_ai_eval is None or
-                    (datetime.now() - last_ai_eval).total_seconds() >= 4 * 3600
+                    (datetime.now() - last_ai_eval).total_seconds() >= cooldown_hours * 3600
                 )
                 
                 # Consultar IA si hay ganancia >= 2% y el cooldown lo permite
-                # La IA decide si vale la pena vender según el contexto completo del mercado
                 if cooldown_ok and profit_pct >= 2.0:
                     logger.info(
                         f"🧠 AI evaluando venta DCA {symbol}: "

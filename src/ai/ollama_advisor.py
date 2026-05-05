@@ -400,6 +400,7 @@ REGLAS ESTRICTAS:
    - 0.10 (10%) para ventas ligeras / asegurar algo
    - 0.25 (25%) para toma de ganancias moderada
    - 0.50 (50%) para señales fuertes de techo
+   - 0.60 (60%) MAX - SOLO para asegurar ganancias altas (>10%) si hay fuerte riesgo de retroceso. NUNCA vender todo.
 5. El campo "reasoning" debe ser en ESPAÑOL ÚNICAMENTE (máximo 2 oraciones, sin caracteres chinos)
 6. NO inventes datos. Usa SOLO los datos proporcionados
 7. NO pongas bloques de pensamiento, solo el JSON"""
@@ -429,7 +430,7 @@ INDICADORES TÉCNICOS ACTUALES:
 PREGUNTA: ¿Debo vender algo de esta posición ahora o mantener todo?
 
 Responde SOLO con este formato JSON:
-{{"should_sell": true/false, "sell_pct": 0.10/0.25/0.50, "urgency": 1-10, "reasoning": "tu análisis aquí"}}"""
+{{"should_sell": true/false, "sell_pct": 0.10/0.25/0.50/0.60, "urgency": 1-10, "reasoning": "tu análisis aquí"}}"""
 
         response = self._query_ollama(prompt, system_prompt, max_tokens=256)
         result = self._parse_json_response(response)
@@ -441,14 +442,16 @@ Responde SOLO con este formato JSON:
             
             # Validar y normalizar sell_pct
             sell_pct = float(result.get("sell_pct", 0.25))
-            if sell_pct not in (0.10, 0.25, 0.50):
+            if sell_pct not in (0.10, 0.25, 0.50, 0.60):
                 # Redondear al más cercano válido
                 if sell_pct <= 0.15:
                     sell_pct = 0.10
                 elif sell_pct <= 0.35:
                     sell_pct = 0.25
-                else:
+                elif sell_pct <= 0.55:
                     sell_pct = 0.50
+                else:
+                    sell_pct = 0.60
             result["sell_pct"] = sell_pct
             
             # Sanitizar reasoning (quitar caracteres chinos que qwen2.5 a veces mezcla)
