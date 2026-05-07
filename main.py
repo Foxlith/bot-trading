@@ -438,7 +438,9 @@ class TradingBot:
         # Condiciones para consultar: cooldown 4h + ganancia >= 2%
         if not exit_signal and self.ai_advisor.is_available() and OLLAMA.get("filter_enabled", False):
             accumulated = float(dca.accumulated.get(symbol, 0))
-            if accumulated > 0:
+            # No evaluar venta si el acumulado es polvo (< $0.50 de valor)
+            accumulated_value_usd = accumulated * float(data.get("price", 0))
+            if accumulated > 0 and accumulated_value_usd >= 0.50:
                 entry_price = float(dca.entry_prices.get(symbol, 0))
                 current_price = float(data.get("price", 0))
                 profit_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
@@ -511,7 +513,11 @@ class TradingBot:
             total_amount = float(dca.accumulated.get(symbol, 0))
             sell_amount = total_amount * sell_pct
             
-            if sell_amount > 0:
+            # FIX DUST: Verificar que la venta vale al menos $1 USD para evitar órdenes de polvo
+            sell_value_usd = sell_amount * float(data.get("price", 0))
+            MIN_SELL_USD = 1.0  # Mínimo $1 USD por venta DCA
+            
+            if sell_amount > 0 and sell_value_usd >= MIN_SELL_USD:
                 order = self.exchange.place_order(symbol, "sell", sell_amount)
                 
                 if "error" not in order:
@@ -547,6 +553,16 @@ class TradingBot:
                     })
                 else:
                     logger.warning(f"⚠️ DCA {symbol}: Orden de venta rechazada: {order}")
+            elif sell_amount > 0 and sell_value_usd < MIN_SELL_USD:
+                logger.warning(
+                    f"⚠️ DCA {symbol}: Venta bloqueada — cantidad es polvo "
+                    f"({sell_amount:.8f} = ~${sell_value_usd:.4f} USD < ${MIN_SELL_USD} mínimo). "
+                    f"Limpiando acumulado residual."
+                )
+                # Limpiar el polvo del estado interno para que no se siga intentando vender
+                from decimal import Decimal as _Decimal
+                dca.accumulated[symbol] = _Decimal('0')
+                dca._save_state()
     
     def _run_grid_strategy(self, symbol: str, data: Dict, config: Dict) -> None:
         """Ejecuta la estrategia Grid."""
