@@ -33,7 +33,7 @@ EXCHANGE = {
 # CONFIGURACIÓN DE CAPITAL Y APORTES
 # =============================================================================
 CAPITAL = {
-    "initial_cop": 1_200_000,  # Total invertido en pesos colombianos
+    "initial_cop": 1_460_800,  # Total invertido en pesos colombianos (400 USD * 3652)
     "monthly_contribution_cop": 300_000,
     "usd_cop_rate": 3_652,  # TRM actual COP/USD
     "initial_usd": 400,  # Capital inicial para paper trading
@@ -86,7 +86,7 @@ RISK_MANAGEMENT = {
     "max_position_size_pct": 0.40,  # 40% del capital asignado a estrategia por trade
     
     # Tamaño mínimo de orden en USD (nuevo)
-    "min_order_size_usd": 1.00,  # Mínimo $1 por orden (antes era ~$0.15)
+    "min_order_size_usd": 5.00,  # Mínimo $5 por orden para cumplir regla MIN_NOTIONAL de Binance
     
     # Stop loss por defecto (usado como fallback si ATR no disponible)
     "default_stop_loss_pct": 0.03,  # 3%
@@ -120,7 +120,7 @@ RISK_MANAGEMENT = {
     "max_drawdown_pct": 0.15,  # 15%
     
     # Drawdown DIARIO máximo (nuevo trigger de pausa)
-    "max_daily_drawdown_pct": 0.01,  # 1% diario - Pausa si se pierde 1% en un día
+    "max_daily_drawdown_pct": 0.05,  # 5% diario - Pausa si se pierde 5% en un día
     
     # Número máximo de trades abiertos simultáneamente
     "max_open_trades": 5,
@@ -158,14 +158,14 @@ STRATEGIES = {
         "take_profit_pct": 0.03,    # 3% profit target
         "allocation_pct": 0.30,     # 30% del capital para esta estrategia
         "min_volatility_atr": 0.3,  # 0.3% ATR mínimo
-        "order_size_usd": 2.50,     # Tamaño fijo por nivel $2.50
+        "order_size_usd": 5.50,     # Tamaño fijo por nivel $5.50 (Mínimo seguro de Binance)
     },
     "dca_intelligent": {
         "enabled": True,
         "buy_interval_hours": 4,  # Cada 4 horas
         "dip_threshold_pct": 0.03,  # REDUCIDO: Comprar extra si baja 3% (antes 5%)
         "allocation_pct": 0.40,  # 40% del capital
-        "order_size_usd": 3.00,  # NUEVO: Tamaño fijo por compra DCA $3.00
+        "order_size_usd": 5.50,  # NUEVO: Tamaño fijo por compra DCA $5.50 (Mínimo seguro de Binance)
     },
     "technical_rsi_macd": {
         "enabled": True,
