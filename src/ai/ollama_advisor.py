@@ -12,6 +12,9 @@ Funcionalidades:
 
 import json
 import time
+import re
+import bisect
+import threading
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
@@ -30,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from config.settings import OLLAMA
 
+VALID_SELL_PCTS = [0.10, 0.25, 0.50, 0.60]
 
 class OllamaAdvisor:
     """
@@ -57,6 +61,7 @@ class OllamaAdvisor:
         # Cache de respuestas (evita consultas repetidas)
         self._cache: Dict[str, Dict] = {}
         self._cache_times: Dict[str, datetime] = {}
+        self._cache_ttl: Dict[str, int] = {}
         
         # Estadísticas
         self.stats = {
@@ -119,15 +124,18 @@ class OllamaAdvisor:
         """Devuelve respuesta cacheada si existe y no ha expirado."""
         if cache_key in self._cache:
             cache_time = self._cache_times.get(cache_key)
-            if cache_time and (datetime.now() - cache_time) < timedelta(minutes=self.cache_minutes):
+            ttl = self._cache_ttl.get(cache_key, self.cache_minutes)
+            if cache_time and (datetime.now() - cache_time) < timedelta(minutes=ttl):
                 logger.debug(f"🧠 Cache hit: {cache_key}")
                 return self._cache[cache_key]
         return None
     
-    def _set_cache(self, cache_key: str, data: Dict) -> None:
+    def _set_cache(self, cache_key: str, data: Dict, ttl_minutes: Optional[int] = None) -> None:
         """Guarda respuesta en cache."""
         self._cache[cache_key] = data
         self._cache_times[cache_key] = datetime.now()
+        if ttl_minutes is not None:
+            self._cache_ttl[cache_key] = ttl_minutes
     
     def _query_ollama(self, prompt: str, system_prompt: str = "", max_tokens: int = 512) -> Optional[str]:
         """
@@ -174,7 +182,7 @@ class OllamaAdvisor:
             
             logger.info(f"🧠 Ollama respondió en {elapsed:.1f}s")
             
-            content = response.get("message", {}).get("content", "")
+            content = response.message.content
             return content
             
         except Exception as e:
@@ -256,6 +264,7 @@ class OllamaAdvisor:
         cache_key = f"signal_{symbol}_{strategy}_{signal_type}"
         cached = self._get_cached(cache_key)
         if cached:
+            # Stats no se actualizan en cache hits: solo contamos llamadas reales a la API
             return cached
         
         # Construir prompt con datos de mercado
@@ -366,13 +375,18 @@ Responde SOLO con este formato JSON:
         cache_key = f"sell_{symbol}_{strategy}"
         cached = self._get_cached(cache_key)
         if cached:
+            # Stats no se actualizan en cache hits: solo contamos llamadas reales a la API
             return cached
 
         # Datos de la posición
         entry_price = float(position_data.get("entry_price", 0) or 0)
         current_price = float(market_data.get("price", 0) or 0)
         accumulated = float(position_data.get("accumulated", 0) or 0)
-        profit_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+        profit_pct = (
+            ((current_price - entry_price) / entry_price * 100)
+            if entry_price > 0 and current_price > 0
+            else 0.0
+        )
         
         # Calcular valor de la posición y costos estimados
         position_value_usd = accumulated * current_price
@@ -442,24 +456,14 @@ Responde SOLO con este formato JSON:
             
             # Validar y normalizar sell_pct
             sell_pct = float(result.get("sell_pct", 0.25))
-            if sell_pct not in (0.10, 0.25, 0.50, 0.60):
-                # Redondear al más cercano válido
-                if sell_pct <= 0.15:
-                    sell_pct = 0.10
-                elif sell_pct <= 0.35:
-                    sell_pct = 0.25
-                elif sell_pct <= 0.55:
-                    sell_pct = 0.50
-                else:
-                    sell_pct = 0.60
-            result["sell_pct"] = sell_pct
+            result["sell_pct"] = self._snap_sell_pct(sell_pct)
             
             # Sanitizar reasoning (quitar caracteres chinos que qwen2.5 a veces mezcla)
             result["reasoning"] = self._sanitize_to_spanish(result.get("reasoning", ""))
 
             # Log detallado
             emoji = "🔴" if result["should_sell"] else "🟡"
-            action = f"VENDER {int(sell_pct*100)}%" if result["should_sell"] else "MANTENER"
+            action = f"VENDER {int(result['sell_pct']*100)}%" if result["should_sell"] else "MANTENER"
             logger.info(
                 f"🧠 AI {emoji} {symbol} [{strategy}] | "
                 f"Urgencia: {urgency}/10 | {action} | "
@@ -468,10 +472,7 @@ Responde SOLO con este formato JSON:
             )
 
             # Guardar en cache (3 minutos para ventas)
-            self._cache[cache_key] = result
-            self._cache_times[cache_key] = datetime.now() - timedelta(
-                minutes=self.cache_minutes - 3
-            )
+            self._set_cache(cache_key, result, ttl_minutes=3)
             return result
 
         logger.warning("🧠 AI no pudo analizar oportunidad de venta - Manteniendo posición")
@@ -624,7 +625,6 @@ Genera un reporte breve con:
         Limpia bloques de pensamiento (<think>...</think>) de modelos
         que usan modo thinking (como Qwen3).
         """
-        import re
         # Eliminar bloques <think>...</think>
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         # Limpiar líneas vacías extras
@@ -636,7 +636,6 @@ Genera un reporte breve con:
         Elimina caracteres no-latinos (chino, japonés, coreano, etc.) que
         el modelo qwen2.5 a veces mezcla en sus respuestas en español.
         """
-        import re
         # Eliminar caracteres CJK (chino/japonés/coreano) y otros scripts no-latinos
         cleaned = re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]+', '', text)
         # Limpiar espacios y puntuación sueltos que queden
@@ -644,6 +643,12 @@ Genera un reporte breve con:
         cleaned = re.sub(r'[，。、]+', '.', cleaned)  # Puntuación china → punto
         return cleaned.strip()
     
+    def _snap_sell_pct(self, value: float) -> float:
+        """Snaps a value to the nearest valid sell percentage."""
+        idx = bisect.bisect_left(VALID_SELL_PCTS, value)
+        candidates = VALID_SELL_PCTS[max(0, idx-1):idx+1]
+        return min(candidates, key=lambda x: abs(x - value))
+
     def get_stats(self) -> Dict[str, Any]:
         """Devuelve estadísticas del AI Advisor."""
         return {
@@ -662,10 +667,13 @@ Genera un reporte breve con:
 
 # Singleton
 _advisor: Optional[OllamaAdvisor] = None
+_advisor_lock = threading.Lock()
 
 def get_ai_advisor() -> OllamaAdvisor:
     """Obtiene la instancia singleton del AI Advisor."""
     global _advisor
     if _advisor is None:
-        _advisor = OllamaAdvisor()
+        with _advisor_lock:
+            if _advisor is None:
+                _advisor = OllamaAdvisor()
     return _advisor
