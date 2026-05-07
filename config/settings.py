@@ -36,7 +36,7 @@ CAPITAL = {
     "initial_cop": 1_200_000,  # Total invertido en pesos colombianos
     "monthly_contribution_cop": 300_000,
     "usd_cop_rate": 3_652,  # TRM actual COP/USD
-    "initial_usd": 300,  # Capital inicial para paper trading
+    "initial_usd": 400,  # Capital inicial para paper trading
     "monthly_contribution_usd": 82,
 }
 
@@ -240,5 +240,5 @@ OLLAMA = {
 # =============================================================================
 OPERATION_MODE = {
     "mode": "paper",  # "paper" para simulación, "live" para real
-    "paper_balance_usd": 300,  # Balance inicial en paper trading
+    "paper_balance_usd": 400,  # Balance inicial en paper trading
 }
