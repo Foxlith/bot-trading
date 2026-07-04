@@ -1,110 +1,110 @@
 # AGENTS.md — FoxTrading Bot
 
-## Overview
+## Descripción General
 
-FoxTrading is an automated cryptocurrency trading bot for Binance that combines 3 classic
-strategies with a local AI analyst (via Ollama) to make intelligent buy/sell decisions.
-It runs in **paper trading** mode by default (simulated with real Binance prices)
-and can switch to **live** mode.
+FoxTrading es un bot de trading automatizado para criptomonedas en Binance que combina
+3 estrategias clásicas con un analista de IA local (via Ollama) para tomar decisiones
+inteligentes de compra/venta. Por defecto corre en modo **paper trading** (simulado con
+precios reales de Binance) y puede cambiarse a modo **live**.
 
-## Architecture (High-Level)
+## Arquitectura (Alto Nivel)
 
 ```
-main.py                 # Main loop: orchestrates all cycles
-config/settings.py      # Centralized configuration (ALL parameters here)
+main.py                 # Bucle principal: orquesta todos los ciclos
+config/settings.py      # Configuración centralizada (TODOS los parámetros aquí)
 src/
-├── ai/ollama_advisor.py    # Local LLM advisor (Ollama)
+├── ai/ollama_advisor.py    # Asesor IA local (Ollama)
 ├── core/
-│   ├── exchange_manager.py # Binance connection via ccxt, paper wallet simulation
-│   ├── data_manager.py     # OHLCV fetching, technical indicators (RSI, MACD, BB, EMA, ATR)
-│   └── state_manager.py    # SQLite persistence (positions, history, stats)
+│   ├── exchange_manager.py # Conexión Binance via ccxt, simulación paper wallet
+│   ├── data_manager.py     # Obtención OHLCV, indicadores técnicos (RSI, MACD, BB, EMA, ATR)
+│   └── state_manager.py    # Persistencia SQLite (posiciones, historial, estadísticas)
 ├── strategies/
-│   ├── dca_strategy.py         # DCA Intelligent (40% capital)
-│   ├── grid_strategy.py        # Grid Trading (30% capital)
-│   └── technical_strategy.py   # RSI+MACD Technical (30% capital)
-├── risk/risk_manager.py        # Stop loss, trailing stop, drawdown, pair protections
-├── notifications/telegram_bot.py  # Interactive Telegram commands
-└── utils/transaction_manager.py   # TX ID generation, standardized trade payloads
+│   ├── dca_strategy.py         # DCA Inteligente (40% del capital)
+│   ├── grid_strategy.py        # Grid Trading (30% del capital)
+│   └── technical_strategy.py   # RSI+MACD Técnico (30% del capital)
+├── risk/risk_manager.py        # Stop loss, trailing stop, drawdown, protecciones por par
+├── notifications/telegram_bot.py  # Comandos interactivos de Telegram
+└── utils/transaction_manager.py   # Generación de TX ID, payloads estandarizados
 ```
 
-## Key Files & Responsibilities
+## Archivos Clave y Responsabilidades
 
-| File | Purpose |
+| Archivo | Propósito |
 |---|---|
-| main.py | Bot engine runs cycles (~60s each): fetch data, run strategies, execute signals, AI check, risk, notifications |
-| config/settings.py | Centralized config: exchange, capital, portfolio, strategies, risk, Ollama, Telegram |
-| src/core/exchange_manager.py | Singleton wrapping ccxt.binance, rate limiting, paper wallet, order placement |
-| src/core/data_manager.py | OHLCV + technical indicators (RSI, MACD, BB, EMAs, ATR), 5-min cache |
-| src/core/state_manager.py | SQLite persistence: positions, trade_history, strategy_state, bot_stats, portfolio_state |
-| src/strategies/dca_strategy.py | DCA Intelligent: buys every 4h, dip detection, AI-driven partial sells (10/25/50%) |
-| src/strategies/grid_strategy.py | Grid Trading: 7-level grid, 1.5% spacing, dynamic recentering, trend/volatility filters |
-| src/strategies/technical_strategy.py | RSI+MACD: scoring system, 2-period confirmation, ATR-based SL/TP, trailing stop |
-| src/ai/ollama_advisor.py | Local LLM (qwen2.5:7b) signal filter + sell analyzer + portfolio analysis, cached |
-| src/risk/risk_manager.py | Position sizing, drawdown (15%/5%), dynamic trailing (profit tiers), pair protections |
-| src/notifications/telegram_bot.py | Async Telegram with /informe, /estado, /posiciones, /coins, /ai, /grafico, etc. |
-| src/utils/transaction_manager.py | Unique TX IDs and standardized trade payloads |
+| main.py | Motor del bot: ciclos (~60s) de datos, estrategias, IA, riesgo, notificaciones |
+| config/settings.py | Config central: exchange, capital, portafolio, estrategias, riesgo, Ollama, Telegram |
+| src/core/exchange_manager.py | Singleton de ccxt.binance, rate limiting, paper wallet, órdenes |
+| src/core/data_manager.py | OHLCV + indicadores (RSI, MACD, BB, EMAs, ATR), caché de 5 min |
+| src/core/state_manager.py | SQLite: posiciones, trade_history, strategy_state, bot_stats, portfolio_state |
+| src/strategies/dca_strategy.py | DCA Inteligente: compras cada 4h, detección de caídas, ventas parciales con IA |
+| src/strategies/grid_strategy.py | Grid Trading: 7 niveles, 1.5% spacing, recentrado dinámico, filtros |
+| src/strategies/technical_strategy.py | RSI+MACD: sistema de puntuación, confirmación de 2 períodos, SL/TP dinámico |
+| src/ai/ollama_advisor.py | LLM local (qwen2.5:7b): filtro de señales + análisis de ventas + análisis de portafolio |
+| src/risk/risk_manager.py | Tamaño de posición, drawdown (15%/5%), trailing dinámico, protecciones por par |
+| src/notifications/telegram_bot.py | Telegram asíncrono: /informe, /estado, /posiciones, /coins, /ai, /grafico |
+| src/utils/transaction_manager.py | IDs únicos TX y payloads estandarizados |
 
-## Main Loop (per ~60s cycle)
+## Bucle Principal (ciclo ~60s)
 
-1. Risk Check — paused, drawdown ok, consecutive losses within limits
-2. Market Data — OHLCV + RSI/MACD/BB/EMA/ATR for all symbols (BTC, ETH, SOL)
-3. Technical Strategy — should_enter/should_exit with AI filter approval
-4. Grid Trading — check 7 levels, execute buys/sells (multiple per cycle)
-5. DCA Intelligent — interval elapsed, dip multiplier, AI sell analysis, execute
-6. Risk Recording — record trades, update capital, save SQLite state
-7. Notifications — Telegram per trade, daily report at configured hour
-8. Periodic Tasks — schedule: DCA buys, daily reports, grid recentering, state persistence
+1. **Verificación de Riesgo** — ¿Trading pausado? ¿Drawdown ok? ¿Pérdidas consecutivas dentro del límite?
+2. **Datos de Mercado** — OHLCV + RSI/MACD/BB/EMA/ATR para todos los símbolos (BTC, ETH, SOL)
+3. **Estrategia Técnica** — should_enter/should_exit con aprobación del filtro IA
+4. **Grid Trading** — revisar 7 niveles, ejecutar compras/ventas (varias por ciclo)
+5. **DCA Inteligente** — intervalo transcurrido, multiplicador por caída, análisis de venta IA, ejecutar
+6. **Registro de Riesgo** — guardar resultados, actualizar capital, persistir en SQLite
+7. **Notificaciones** — Telegram por cada trade, reporte diario a la hora configurada
+8. **Tareas Periódicas** — schedule: compras DCA, reportes diarios, recentrado de grid, persistencia
 
-## Configuration Pattern
+## Patrón de Configuración
 
-config/settings.py uses GROUP dictionaries:
-- EXCHANGE — Binance API keys, testnet flag
-- CAPITAL — Initial USD, COP rate, monthly contributions
-- PORTFOLIO — Symbol allocation percentages, sell_only flags
-- STRATEGIES — Per-strategy: enabled, levels, spacing, allocation_pct, thresholds
-- RISK_MANAGEMENT — Position sizing, trailing (dynamic tiers), protections, drawdown
-- OLLAMA — Model name, enabled, min_confidence, filter_enabled
-- TELEGRAM — Bot token, chat ID, notification toggles
-- TRADING_COSTS — Maker/taker fees, slippage
-- OPERATION_MODE — paper/live switch
+config/settings.py usa diccionarios GRUPO:
+- EXCHANGE — API keys de Binance, bandera testnet
+- CAPITAL — USD inicial, tasa COP, aportes mensuales
+- PORTFOLIO — Porcentajes de asignación por símbolo, flags sell_only
+- STRATEGIES — Por estrategia: habilitada, niveles, spacing, allocation_pct, umbrales
+- RISK_MANAGEMENT — Tamaño de posición, trailing (tiers dinámicos), protecciones, drawdown
+- OLLAMA — Nombre del modelo, habilitado, min_confidence, filter_enabled
+- TELEGRAM — Token del bot, chat ID, notificaciones activadas
+- TRADING_COSTS — Comisiones maker/taker, slippage
+- OPERATION_MODE — Modo paper/live
 
-## Data Flow
+## Flujo de Datos
 
-1. ExchangeManager.get_ohlcv() → raw OHLCV
-2. DataManager.get_market_data() → pandas DataFrame + cache
+1. ExchangeManager.get_ohlcv() → lista OHLCV cruda
+2. DataManager.get_market_data() → pandas DataFrame + caché
 3. DataManager.add_technical_indicators(df) → RSI, MACD, BB, EMAs, ATR
-4. DataManager.get_market_summary(symbol) → dict with price/indicators/trend
-5. Strategy classes receive dict in analyze/should_enter/should_exit
-6. If approved → ExchangeManager.place_order() or _paper_order()
+4. DataManager.get_market_summary(symbol) → dict con precio/indicadores/tendencia
+5. Las estrategias reciben el dict en analyze/should_enter/should_exit
+6. Si es aprobado → ExchangeManager.place_order() o _paper_order()
 7. StateManager.save_position/close_position/add_to_history
 8. RiskManager.record_trade_result/record_pair_trade
-9. TelegramBot notifications
+9. TelegramBot envía notificaciones
 
 ## Paper Trading
 
-When OPERATION_MODE mode = paper:
-- market_exchange (public, no keys) for real prices
-- _paper_order() simulates via JSON wallet (data/paper_wallet.json)
-- Fees: 0.1% maker/taker, Decimal precision
+Cuando OPERATION_MODE mode = paper:
+- market_exchange (público, sin keys) para precios reales
+- _paper_order() simula via JSON wallet (data/paper_wallet.json)
+- Comisiones: 0.1% maker/taker, precisión Decimal
 
-## AI Advisor (Ollama)
+## Asesor IA (Ollama)
 
-Acts as filter, not executor:
-- analyze_trade_signal(): before every trade, returns approved/confidence(1-10)/reasoning. Blocked if confidence < 5.
-- analyze_sell_opportunity(): proactive DCA sells, returns should_sell/sell_pct/urgency.
-- /ai Telegram command for portfolio narrative report.
-- Cached: 5min (3min sells).
+Actúa como filtro, no ejecutor:
+- analyze_trade_signal(): antes de cada trade, retorna approved/confidence(1-10)/reasoning. Bloqueado si confidence < 5.
+- analyze_sell_opportunity(): ventas DCA proactivas, retorna should_sell/sell_pct/urgency.
+- Comando /ai de Telegram para reporte narrativo del portafolio.
+- Caché: 5min (3min para ventas).
 
-## Key Design Decisions
+## Decisiones de Diseño Clave
 
-- Decimal for money (float only for SQLite/JSON persistence)
-- No inline comments convention
-- Singleton pattern for all managers (get_*())
-- Dual persistence: SQLite tables + JSON blobs in strategy_state
-- Pair protections: pause individual pairs after 3 losses in 12h
-- Dynamic trailing stop: tiers tighten as profit increases (2.5% → 2.0% → 1.5% → 1.0%)
+- Decimal para dinero (float solo para persistencia SQLite/JSON)
+- Sin comentarios en código (convención del proyecto)
+- Patrón Singleton para todos los managers (get_*())
+- Persistencia dual: tablas SQLite + blobs JSON en strategy_state
+- Protecciones por par: pausar pares individuales tras 3 pérdidas en 12h
+- Trailing stop dinámico: niveles se ajustan según ganancia (2.5% → 2.0% → 1.5% → 1.0%)
 
-## Testing
+## Pruebas
 
 ```
 pytest tests/
